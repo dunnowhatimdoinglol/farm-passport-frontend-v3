@@ -9,7 +9,7 @@ const API_BASE = 'http://localhost:3002/api';
  * Props:
  *   receiptId   – the RECEIPT-YYYYMMDD-XXXXXX string from the scanner
  *   authToken   – JWT from the logged-in session (passed down from App)
- *   onSuccess   – called with { farmName, batchId, receiptId, transactionHash } after a successful claim
+ *   onSuccess   – called with { farmName, batchId, restaurantName, receiptId, transactionHash } after a successful claim
  *   onBack      – navigate back to the scanner
  */
 function ReceiptView({ receiptId, authToken, onSuccess, onBack }) {
@@ -71,10 +71,11 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack }) {
       // bubble up to App so it can show the success modal
       if (onSuccess) {
         onSuccess({
-          farmName:        farmName,
-          batchId:         batchId,
+          farmName:        res.data.farmName        || res.data.farm_name        || farmName,
+          batchId:         res.data.batchId         || res.data.batch_id         || batchId,
+          restaurantName:  restaurantName,
           receiptId:       receiptId,
-          transactionHash: res.data?.transactionHash || res.data?.transaction_hash || null,
+          transactionHash: res.data.transactionHash || res.data.transaction_hash || null,
         });
       }
     } catch (err) {

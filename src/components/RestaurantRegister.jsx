@@ -6,6 +6,7 @@ function RestaurantRegister({ onRegister, onSwitchToLogin }) {
   const [password,       setPassword]       = useState('');
   const [confirmPwd,     setConfirmPwd]     = useState('');
   const [restaurantName, setRestaurantName] = useState('');
+  const [postcode,       setPostcode]       = useState('');
   const [loading,        setLoading]        = useState(false);
   const [error,          setError]          = useState('');
 
@@ -25,6 +26,10 @@ function RestaurantRegister({ onRegister, onSwitchToLogin }) {
       setError('Restaurant name is required');
       return;
     }
+    if (!postcode.trim()) {
+      setError('Postcode is required');
+      return;
+    }
 
     setLoading(true);
 
@@ -32,7 +37,8 @@ function RestaurantRegister({ onRegister, onSwitchToLogin }) {
       const response = await axios.post('http://localhost:3002/api/restaurant/auth/register', {
         email,
         password,
-        restaurantName: restaurantName.trim()
+        restaurantName: restaurantName.trim(),
+        postcode:       postcode.trim()
       });
 
       console.log('Restaurant registration successful:', response.data);
@@ -75,6 +81,19 @@ function RestaurantRegister({ onRegister, onSwitchToLogin }) {
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
               required
             />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Postcode</label>
+            <input
+              type="text"
+              value={postcode}
+              onChange={(e) => setPostcode(e.target.value)}
+              placeholder="e.g. SW1A 1AA"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+              required
+            />
+            <p className="text-xs text-gray-400 mt-1">Used so customers can discover your restaurant</p>
           </div>
 
           <div>

@@ -10,6 +10,7 @@ import UnlockBadge      from './components/UnlockBadge';
 import BadgeCollection  from './components/BadgeCollection';
 import FarmerPortal       from './components/FarmerPortal';
 import RestaurantPortal   from './components/RestaurantPortal';
+import RestaurantFinder from './components/RestaurantFinder';
 
 function App() {
   // ── Auth state ──
@@ -183,8 +184,7 @@ function App() {
         {/* ── Success modal (receipt badge claim) ── */}
         {showSuccessModal && successInfo && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-8 text-center animate-bounce-once">
-              <div className="text-7xl mb-4">🎉</div>
+<div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-8 text-center animate-bounce-once overflow-y-auto max-h-screen">              <div className="text-7xl mb-4">🎉</div>
               <h2 className="text-3xl font-bold text-gray-800 mb-2">Badge Unlocked!</h2>
               <p className="text-gray-600">
                 You've earned a badge from <strong>{successInfo.farmName}</strong>!
@@ -204,6 +204,10 @@ function App() {
                 </p>
               )}
 
+              <RestaurantFinder
+                batchId={successInfo.batchId}
+                excludeRestaurant={successInfo.restaurantName}
+              />
               <div className="flex gap-3 justify-center mt-6">
                 <button
                   onClick={handleViewBadges}
