@@ -6,6 +6,7 @@ function FarmStory({ batchId, onBack, onViewBadges, viewOnly = false }) {
   const [batchData, setBatchData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [farmerBio, setFarmerBio] = useState('');
 
   useEffect(() => {
     fetchBatchData();
@@ -21,6 +22,18 @@ function FarmStory({ batchId, onBack, onViewBadges, viewOnly = false }) {
 
       if (response.data.success) {
         setBatchData(response.data.data);
+
+        // Fetch farmer bio from database
+        if (response.data.data?.farmer?.address) {
+          try {
+            const bioRes = await axios.get(
+              `http://localhost:3002/api/farmer/profile/${response.data.data.farmer.address}`
+            );
+            setFarmerBio(bioRes.data.profile?.bio || '');
+          } catch (err) {
+            console.log('No farmer bio:', err.message);
+          }
+        }
       }
     } catch (err) {
       console.error('Error fetching batch:', err);
@@ -91,7 +104,11 @@ function FarmStory({ batchId, onBack, onViewBadges, viewOnly = false }) {
               </p>
             </div>
             <div>
-              <p className="text-sm text-gray-600">Product Type</p>
+              <p className="text-sm text-gray-600">Product</p>
+              <p className="font-semibold text-gray-800">{batchData.productName || 'Unknown'}</p>
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Type</p>
               <p className="font-semibold text-gray-800">{batchData.cropType}</p>
             </div>
             <div>
@@ -107,11 +124,24 @@ function FarmStory({ batchId, onBack, onViewBadges, viewOnly = false }) {
           </div>
         </div>
 
-        {/* Farm Description */}
+        {/* Farmer Bio (from database) */}
+        {farmerBio && (
+          <div className="bg-green-50 border border-green-200 rounded-lg p-5 mb-6">
+            <h3 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2">
+              <span>🌾</span>
+              <span>About This Farm</span>
+            </h3>
+            <p className="text-gray-700 whitespace-pre-wrap leading-relaxed">
+              {farmerBio}
+            </p>
+          </div>
+        )}
+
+        {/* Farm Description (from blockchain - if still needed) */}
         {batchData.farmer.description && (
           <div className="mb-6">
             <h3 className="text-xl font-bold text-gray-800 mb-3">
-              About the Farm
+              Farm Details
             </h3>
             <p className="text-gray-700 leading-relaxed">
               {batchData.farmer.description}
@@ -130,7 +160,7 @@ function FarmStory({ batchId, onBack, onViewBadges, viewOnly = false }) {
         )}
       </div>
 
-      {/* ─── ONLY CHANGE: conditional badge section ─── */}
+      {/* Badge section - conditional based on viewOnly */}
       {viewOnly ? (
         /* Menu QR scanned → no unlock, just a nudge */
         <div className="bg-gray-50 border-2 border-gray-200 rounded-lg p-8">

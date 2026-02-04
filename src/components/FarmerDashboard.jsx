@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import CreateBatchForm from './CreateBatchForm';
 import { QRCodeSVG } from 'qrcode.react';
+import { ethers } from 'ethers';
 
 function FarmerDashboard({ privateKey, onLogout }) {
   const [loading, setLoading] = useState(true);
@@ -9,6 +10,12 @@ function FarmerDashboard({ privateKey, onLogout }) {
   const [farmerData, setFarmerData] = useState(null);
   const [showCreateBatch, setShowCreateBatch] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  // Bio editing state
+  const [editingBio, setEditingBio] = useState(false);
+  const [bioText, setBioText] = useState('');
+  const [bioSaving, setBioSaving] = useState(false);
+  const [bioError, setBioError] = useState('');
 
   useEffect(() => {
     fetchDashboardData();
@@ -24,6 +31,19 @@ function FarmerDashboard({ privateKey, onLogout }) {
       });
 
       setFarmerData(response.data);
+
+      // Fetch farmer profile (bio) if we have the address
+      if (response.data.farmer?.address) {
+        try {
+          const profileRes = await axios.get(
+            `http://localhost:3002/api/farmer/profile/${response.data.farmer.address}`
+          );
+          setBioText(profileRes.data.profile?.bio || '');
+        } catch (err) {
+          console.log('No profile yet:', err.message);
+          setBioText('');
+        }
+      }
     } catch (err) {
       console.error('Dashboard error:', err);
       setError(err.response?.data?.error || err.message);
@@ -35,6 +55,27 @@ function FarmerDashboard({ privateKey, onLogout }) {
   const handleBatchCreated = () => {
     setShowCreateBatch(false);
     setRefreshTrigger(prev => prev + 1);
+  };
+
+  const handleSaveBio = async () => {
+    if (!farmerData?.farmer?.address) return;
+
+    try {
+      setBioSaving(true);
+      setBioError('');
+
+      await axios.put(
+        `http://localhost:3002/api/farmer/profile/${farmerData.farmer.address}`,
+        { bio: bioText.trim() }
+      );
+
+      setEditingBio(false);
+    } catch (err) {
+      console.error('Error saving bio:', err);
+      setBioError(err.response?.data?.error || 'Failed to save bio');
+    } finally {
+      setBioSaving(false);
+    }
   };
 
   const downloadQRCode = (batchId, productName) => {
@@ -135,8 +176,79 @@ function FarmerDashboard({ privateKey, onLogout }) {
         </div>
       </div>
 
+      {/* Farm Bio Section */}
+      <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-lg font-bold text-gray-800">📝 Farm Bio</h3>
+          {!editingBio && (
+            <button
+              onClick={() => setEditingBio(true)}
+              className="text-blue-600 hover:underline text-sm font-semibold"
+            >
+              ✏️ Edit
+            </button>
+          )}
+        </div>
+
+        {editingBio ? (
+          <div>
+            <textarea
+              value={bioText}
+              onChange={(e) => setBioText(e.target.value)}
+              placeholder="Tell customers about your farm, your animals, and your farming practices..."
+              rows="6"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent mb-3"
+              maxLength="500"
+            />
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-gray-400">{bioText.length}/500 characters</p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    setEditingBio(false);
+                    setBioError('');
+                    // Reset to original
+                    fetchDashboardData();
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition"
+                  disabled={bioSaving}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveBio}
+                  disabled={bioSaving}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:bg-gray-400"
+                >
+                  {bioSaving ? 'Saving...' : 'Save Bio'}
+                </button>
+              </div>
+            </div>
+            {bioError && (
+              <p className="text-red-600 text-sm mt-2">⚠️ {bioError}</p>
+            )}
+          </div>
+        ) : (
+          <div>
+            {bioText ? (
+              <p className="text-gray-700 whitespace-pre-wrap">{bioText}</p>
+            ) : (
+              <p className="text-gray-400 italic">
+                No bio yet. Click "Edit" to tell customers about your farm!
+              </p>
+            )}
+          </div>
+        )}
+
+        <div className="mt-4 pt-4 border-t border-gray-200">
+          <p className="text-xs text-gray-500">
+            💡 This bio will appear on the farm story page when customers scan your product QR codes.
+          </p>
+        </div>
+      </div>
+
       {/* Statistics Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
         <div className="bg-white rounded-lg shadow p-6">
           <div className="flex items-center gap-3">
             <div className="text-3xl">📦</div>
@@ -154,18 +266,6 @@ function FarmerDashboard({ privateKey, onLogout }) {
               <p className="text-gray-500 text-sm">Badges Unlocked</p>
               <p className="text-3xl font-bold text-gray-800">
                 {batches.reduce((sum, batch) => sum + (batch.unlocks || 0), 0)}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center gap-3">
-            <div className="text-3xl">👁️</div>
-            <div>
-              <p className="text-gray-500 text-sm">Total Scans</p>
-              <p className="text-3xl font-bold text-gray-800">
-                {batches.reduce((sum, batch) => sum + (batch.scans || 0), 0)}
               </p>
             </div>
           </div>
@@ -215,7 +315,6 @@ function FarmerDashboard({ privateKey, onLogout }) {
         ) : (
           <div className="space-y-4">
             {batches.map((batch, index) => {
-              // SAFE STRING CONVERSION - Fixes "object Object" bug
               const batchId = String(batch.batchId || 'Unknown');
               const productType = String(batch.productType || 'Unknown');
               const productName = String(batch.productName || 'Unknown');
@@ -224,7 +323,6 @@ function FarmerDashboard({ privateKey, onLogout }) {
               const timestamp = batch.timestamp || new Date().toISOString();
               const txHash = String(batch.transactionHash || '');
               
-              // Product emoji based on type
               const getEmoji = (type) => {
                 const typeStr = String(type).toLowerCase();
                 if (typeStr.includes('vegetable')) return '🥬';
@@ -242,7 +340,6 @@ function FarmerDashboard({ privateKey, onLogout }) {
                 >
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
-                      {/* Product Info */}
                       <div className="flex items-center gap-2 mb-2">
                         <span className="text-2xl">{getEmoji(productType)}</span>
                         <div>
@@ -255,12 +352,10 @@ function FarmerDashboard({ privateKey, onLogout }) {
                         </div>
                       </div>
                       
-                      {/* Batch ID */}
                       <p className="text-xs text-gray-500 mb-1 font-mono">
                         ID: {batchId}
                       </p>
                       
-                      {/* Timestamp */}
                       <p className="text-sm text-gray-600 mb-2">
                         Created: {new Date(timestamp).toLocaleDateString('en-US', {
                           year: 'numeric',
@@ -271,7 +366,6 @@ function FarmerDashboard({ privateKey, onLogout }) {
                         })}
                       </p>
                       
-                      {/* Transaction Link */}
                       {txHash && (
                         <a
                           href={`https://sepolia.etherscan.io/tx/${txHash}`}
@@ -292,6 +386,8 @@ function FarmerDashboard({ privateKey, onLogout }) {
                           size={100}
                           level="H"
                           includeMargin={true}
+                          bgColor="#ffffff"
+                          fgColor="#000000"
                         />
                       </div>
                       <p className="text-xs text-center text-gray-500 mt-1">
@@ -302,12 +398,6 @@ function FarmerDashboard({ privateKey, onLogout }) {
 
                   {/* Stats Row */}
                   <div className="mt-3 pt-3 border-t flex gap-4 text-sm">
-                    <div>
-                      <span className="text-gray-500">Scans:</span>
-                      <span className="font-semibold text-gray-800 ml-1">
-                        {batch.scans || 0}
-                      </span>
-                    </div>
                     <div>
                       <span className="text-gray-500">Badges:</span>
                       <span className="font-semibold text-gray-800 ml-1">
@@ -336,6 +426,8 @@ function FarmerDashboard({ privateKey, onLogout }) {
                       size={512}
                       level="H"
                       includeMargin={true}
+                      bgColor="#ffffff"
+                      fgColor="#000000"
                     />
                   </div>
                 </div>

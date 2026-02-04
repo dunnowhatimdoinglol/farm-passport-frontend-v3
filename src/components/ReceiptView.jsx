@@ -140,8 +140,7 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack }) {
   const restaurantName = receipt.restaurantName || receipt.restaurant_name || 'Restaurant';
   const amountPaid     = receipt.amountPaid     || receipt.amount_paid;
   const batchId        = receipt.batchId       || receipt.batch_id;
-  const farmName       = receipt.farmName      || receipt.farm_name || receipt.farmer?.name || 'Farm';
-  const productName    = receipt.productName   || receipt.product_name;
+const farmName       = receipt.farmName      || receipt.farm_name || receipt.farmer?.farmName || 'Farm';  const productName    = receipt.productName   || receipt.product_name;
   const createdAt      = receipt.createdAt     || receipt.created_at;
   const expiresAt      = receipt.expiresAt     || receipt.expires_at;
   const isExpired      = expiresAt ? new Date(expiresAt) < new Date() : false;

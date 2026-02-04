@@ -94,8 +94,11 @@ function App() {
 
   // ── Receipt claim success → celebrate modal ──
   const handleReceiptClaimSuccess = (badgeInfo) => {
+    console.log('🎉 handleReceiptClaimSuccess called with:', badgeInfo);
     setSuccessInfo(badgeInfo);
     setShowSuccessModal(true);
+    console.log('showSuccessModal set to true');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   // ──────────────────────────────────────────────────────
