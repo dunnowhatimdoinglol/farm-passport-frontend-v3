@@ -4,7 +4,7 @@ import axios from 'axios';
 import { ethers } from 'ethers';
 
 function FarmerPortal({ onBackToCustomer }) {
-  const [view, setView] = useState('login'); // 'login', 'register', 'dashboard', 'registration-success'
+  const [view, setView] = useState('login');
   const [privateKey, setPrivateKey] = useState('');
   const [farmerAddress, setFarmerAddress] = useState('');
   const [registrationData, setRegistrationData] = useState(null);
@@ -12,11 +12,32 @@ function FarmerPortal({ onBackToCustomer }) {
   // Registration form state
   const [regPrivateKey, setRegPrivateKey] = useState('');
   const [generatedAddress, setGeneratedAddress] = useState('');
-  const [farmName, setFarmName] = useState('');
+  const [email, setEmail] = useState('');            // Email for verification
+  const [farmerName, setFarmerName] = useState('');  // Person's name
+  const [farmName, setFarmName] = useState('');      // Farm business name
   const [location, setLocation] = useState('');
   const [description, setDescription] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  
+  
+  const [season, setSeason] = useState('auto');
+  function getCurrentSeason() {
+  const date = new Date();
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  
+  if ((month === 3 && day >= 21) || month === 4 || month === 5 || (month === 6 && day < 21)) {
+    return 'Spring 🌸';
+  }
+  if ((month === 6 && day >= 21) || month === 7 || month === 8 || (month === 9 && day < 21)) {
+    return 'Summer 🌞';
+  }
+  if ((month === 9 && day >= 21) || month === 10 || month === 11 || (month === 12 && day < 21)) {
+    return 'Autumn 🍂';
+  }
+  return 'Winter ❄️';
+}
 
   const handleGenerateWallet = () => {
     const wallet = ethers.Wallet.createRandom();
@@ -39,35 +60,33 @@ function FarmerPortal({ onBackToCustomer }) {
     setLoading(true);
 
     try {
-      // Get farmer address from private key
       const wallet = new ethers.Wallet(regPrivateKey);
       const farmerAddr = wallet.address;
 
       console.log('Registering farmer (GASLESS)...');
       
-      // GASLESS: Only send address to backend, backend pays gas!
       const response = await axios.post('http://localhost:3002/api/farmer/register', {
-        farmerAddress: farmerAddr,  // Just the address, not private key!
-        farmName,
+        farmerAddress: farmerAddr,
+        email,        // Email for verification
+        farmerName,   // Person's name
+        farmName,     // Farm business name
         location,
         description
       });
 
       console.log('Registration response:', response.data);
 
-      // Store registration data
       setRegistrationData({
+        farmerName,
         farmName,
         farmerAddress: response.data.farmerAddress,
         transactionHash: response.data.transactionHash,
         privateKey: regPrivateKey
       });
 
-      // Set the private key for login
       setPrivateKey(regPrivateKey);
       setFarmerAddress(response.data.farmerAddress);
 
-      // Show success page
       setView('registration-success');
     } catch (err) {
       console.error('Registration error:', err);
@@ -78,16 +97,16 @@ function FarmerPortal({ onBackToCustomer }) {
   };
 
   const handleContinueToDashboard = () => {
-    // Navigate to dashboard using the stored private key
     setView('dashboard');
   };
 
   const handleBackToHome = () => {
-    // Reset to login view
     setView('login');
     setPrivateKey('');
     setRegPrivateKey('');
     setGeneratedAddress('');
+    setEmail('');
+    setFarmerName('');
     setFarmName('');
     setLocation('');
     setDescription('');
@@ -99,6 +118,8 @@ function FarmerPortal({ onBackToCustomer }) {
     return (
       <FarmerDashboard 
         privateKey={privateKey}
+          season={season}              // ← ADD THIS
+          setSeason={setSeason}
         onBack={onBackToCustomer}
         onLogout={() => {
           setView('login');
@@ -125,6 +146,9 @@ function FarmerPortal({ onBackToCustomer }) {
           <div className="bg-green-50 border border-green-200 rounded-lg p-6 mb-6">
             <h3 className="font-bold text-gray-800 mb-4">Farm Details:</h3>
             <div className="space-y-2 text-sm">
+              <p>
+                <span className="font-semibold">Farmer:</span> {registrationData.farmerName}
+              </p>
               <p>
                 <span className="font-semibold">Farm Name:</span> {registrationData.farmName}
               </p>
@@ -234,7 +258,6 @@ function FarmerPortal({ onBackToCustomer }) {
                 Wallet Setup
               </label>
               
-              {/* Generate Wallet Button */}
               {!regPrivateKey && (
                 <button
                   type="button"
@@ -277,6 +300,39 @@ function FarmerPortal({ onBackToCustomer }) {
               )}
             </div>
 
+            {/* Email field */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Email Address *
+              </label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="e.g., farmer@example.com"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                required
+              />
+              <p className="text-xs text-gray-500 mt-1">We'll send you a verification email</p>
+            </div>
+
+            {/* NEW: Farmer Name field */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Your Name *
+              </label>
+              <input
+                type="text"
+                value={farmerName}
+                onChange={(e) => setFarmerName(e.target.value)}
+                placeholder="e.g., John Smith"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                required
+              />
+              <p className="text-xs text-gray-500 mt-1">Your personal name as the farmer</p>
+            </div>
+
+            {/* Farm Name field (already existed, just clarified) */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Farm Name *
@@ -289,6 +345,7 @@ function FarmerPortal({ onBackToCustomer }) {
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
                 required
               />
+              <p className="text-xs text-gray-500 mt-1">Your farm's business name</p>
             </div>
 
             <div>

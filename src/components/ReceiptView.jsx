@@ -1,18 +1,20 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import AchievementPopup from './AchievementPopup';
 
 const API_BASE = 'http://localhost:3002/api';
 
 /**
- * ReceiptView
+ * ReceiptView - Updated with achievement popups
  *
  * Props:
- *   receiptId   – the RECEIPT-YYYYMMDD-XXXXXX string from the scanner
- *   authToken   – JWT from the logged-in session (passed down from App)
- *   onSuccess   – called with { farmName, batchId, restaurantName, receiptId, transactionHash } after a successful claim
- *   onBack      – navigate back to the scanner
+ *   receiptId       – the RECEIPT-YYYYMMDD-XXXXXX string
+ *   authToken       – JWT (can be null if not logged in)
+ *   onSuccess       – called after successful claim
+ *   onBack          – navigate back
+ *   onLoginRequired – opens login modal
  */
-function ReceiptView({ receiptId, authToken, onSuccess, onBack }) {
+function ReceiptView({ receiptId, authToken, onSuccess, onBack, onLoginRequired }) {
   const [receipt,    setReceipt]    = useState(null);
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState(null);
@@ -20,7 +22,10 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack }) {
   const [claimError, setClaimError] = useState(null);
   const [claimed,    setClaimed]    = useState(false);
 
-  // ── Fetch receipt on mount ──
+  // Achievement popup state
+  const [achievements, setAchievements] = useState([]);
+  const [currentAchievement, setCurrentAchievement] = useState(null);
+
   useEffect(() => {
     const fetchReceipt = async () => {
       try {
@@ -28,8 +33,6 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack }) {
         setError(null);
 
         const res = await axios.get(`${API_BASE}/receipt/${receiptId}`);
-
-        // backend may wrap in .data, .receipt, or return flat
         const data = res.data.receipt || res.data.data || res.data;
         setReceipt(data);
 
@@ -49,10 +52,10 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack }) {
     if (receiptId) fetchReceipt();
   }, [receiptId]);
 
-  // ── Claim badge ──
   const handleClaim = async () => {
+    // If not logged in, prompt login
     if (!authToken) {
-      setClaimError('You must be logged in to claim a badge.');
+      if (onLoginRequired) onLoginRequired();
       return;
     }
 
@@ -62,13 +65,18 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack }) {
 
       const res = await axios.post(
         `${API_BASE}/receipt/${receiptId}/claim-badge`,
-        {},                                                  // body – backend doesn't need anything here
+        {},
         { headers: { Authorization: `Bearer ${authToken}` } }
       );
 
       setClaimed(true);
 
-      // bubble up to App so it can show the success modal
+      // Show achievement popups if any were unlocked
+      if (res.data.newAchievements && res.data.newAchievements.length > 0) {
+        setAchievements(res.data.newAchievements);
+        setCurrentAchievement(res.data.newAchievements[0]);
+      }
+
       if (onSuccess) {
         onSuccess({
           farmName:        res.data.farmName        || res.data.farm_name        || farmName,
@@ -83,7 +91,6 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack }) {
       const msg = err.response?.data?.error || 'Failed to claim badge. Please try again.';
       setClaimError(msg);
 
-      // if the server told us it's already claimed, flip the UI accordingly
       if (msg.toLowerCase().includes('already claimed') || msg.toLowerCase().includes('already been')) {
         setClaimed(true);
       }
@@ -92,9 +99,6 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack }) {
     }
   };
 
-  // ─────────────────────────────────────────────
-  // Loading state
-  // ─────────────────────────────────────────────
   if (loading) {
     return (
       <div className="max-w-4xl mx-auto">
@@ -108,9 +112,6 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack }) {
     );
   }
 
-  // ─────────────────────────────────────────────
-  // Error state (receipt not found / network fail)
-  // ─────────────────────────────────────────────
   if (error) {
     return (
       <div className="max-w-4xl mx-auto">
@@ -134,24 +135,34 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack }) {
     );
   }
 
-  // ─────────────────────────────────────────────
-  // Normalise fields – backend may be camelCase or snake_case
-  // ─────────────────────────────────────────────
   const restaurantName = receipt.restaurantName || receipt.restaurant_name || 'Restaurant';
   const amountPaid     = receipt.amountPaid     || receipt.amount_paid;
-  const batchId        = receipt.batchId       || receipt.batch_id;
-const farmName       = receipt.farmName      || receipt.farm_name || receipt.farmer?.farmName || 'Farm';  const productName    = receipt.productName   || receipt.product_name;
-  const createdAt      = receipt.createdAt     || receipt.created_at;
-  const expiresAt      = receipt.expiresAt     || receipt.expires_at;
+  const batchId        = receipt.batchId        || receipt.batch_id;
+  const farmName       = receipt.farmName       || receipt.farm_name || receipt.farmer?.farmName || 'Farm';
+  const productName    = receipt.productName    || receipt.product_name;
+  const createdAt      = receipt.createdAt      || receipt.created_at;
+  const expiresAt      = receipt.expiresAt      || receipt.expires_at;
   const isExpired      = expiresAt ? new Date(expiresAt) < new Date() : false;
 
-  // ─────────────────────────────────────────────
-  // Render – receipt details + claim CTA
-  // ─────────────────────────────────────────────
   return (
     <div className="max-w-4xl mx-auto space-y-6">
 
-      {/* ── Receipt header card ── */}
+      {/* Achievement Popup */}
+      {currentAchievement && (
+        <AchievementPopup
+          achievement={currentAchievement}
+          onClose={() => {
+            // Show next achievement if any
+            const nextIndex = achievements.indexOf(currentAchievement) + 1;
+            if (nextIndex < achievements.length) {
+              setCurrentAchievement(achievements[nextIndex]);
+            } else {
+              setCurrentAchievement(null);
+            }
+          }}
+        />
+      )}
+
       <div className="bg-white rounded-lg shadow-lg p-8">
         <div className="text-center mb-6">
           <div className="text-6xl mb-3">🧾</div>
@@ -159,7 +170,6 @@ const farmName       = receipt.farmName      || receipt.farm_name || receipt.far
           <p className="text-gray-600 text-lg">from <strong>{restaurantName}</strong></p>
         </div>
 
-        {/* Amount + date row */}
         <div className="flex justify-center gap-10 mb-6 flex-wrap">
           {amountPaid !== undefined && amountPaid !== null && (
             <div className="text-center">
@@ -179,7 +189,6 @@ const farmName       = receipt.farmName      || receipt.farm_name || receipt.far
           )}
         </div>
 
-        {/* Product details grid */}
         <div className="bg-green-50 border-2 border-green-200 rounded-lg p-6">
           <h3 className="text-xl font-bold text-gray-800 mb-4">🌱 Product Details</h3>
           <div className="grid grid-cols-2 gap-4">
@@ -205,7 +214,6 @@ const farmName       = receipt.farmName      || receipt.farm_name || receipt.far
         </div>
       </div>
 
-      {/* ── Expiry warning ── */}
       {isExpired && (
         <div className="bg-orange-50 border border-orange-300 rounded-lg p-4 text-center">
           <p className="text-orange-700 font-bold">⏰ This receipt has expired</p>
@@ -213,7 +221,6 @@ const farmName       = receipt.farmName      || receipt.farm_name || receipt.far
         </div>
       )}
 
-      {/* ── Badge CTA or "already claimed" ── */}
       {claimed ? (
         <div className="bg-white rounded-lg shadow-lg p-8">
           <div className="text-center">
@@ -234,38 +241,36 @@ const farmName       = receipt.farmName      || receipt.farm_name || receipt.far
             </p>
             <p className="text-gray-400 text-sm mb-6">This receipt can only be redeemed once.</p>
 
-            {/* Claim error banner */}
             {claimError && (
               <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 max-w-sm mx-auto">
                 <p className="text-red-600 text-sm font-semibold">⚠️ {claimError}</p>
               </div>
             )}
 
-            {/* Claim button */}
             <button
               onClick={handleClaim}
-              disabled={claiming || isExpired || !authToken}
+              disabled={claiming || isExpired}
               className={`px-8 py-3 rounded-lg font-bold text-lg transition shadow-md
-                ${(claiming || isExpired || !authToken)
+                ${(claiming || isExpired)
                   ? 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none'
                   : 'bg-green-600 text-white hover:bg-green-700'
                 }`}
             >
               {claiming    ? '⏳ Claiming…'
                : isExpired ? '⏰ Expired'
-               : !authToken? '🔒 Login Required'
+               : !authToken? '🔐 Login to Claim Badge'
                :            '🎖️ Claim Badge'}
             </button>
 
-            {/* Login nudge when no token */}
             {!authToken && (
-              <p className="text-gray-400 text-sm mt-3">Please log in to claim your badge.</p>
+              <p className="text-gray-500 text-sm mt-3">
+                Click above to login and claim your badge
+              </p>
             )}
           </div>
         </div>
       )}
 
-      {/* ── Back link ── */}
       <div className="text-center">
         <button onClick={onBack} className="text-gray-600 hover:underline">
           ← Back to Scanner

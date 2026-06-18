@@ -4,7 +4,7 @@ import CreateBatchForm from './CreateBatchForm';
 import { QRCodeSVG } from 'qrcode.react';
 import { ethers } from 'ethers';
 
-function FarmerDashboard({ privateKey, onLogout }) {
+function FarmerDashboard({ privateKey, season, setSeason, onLogout }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [farmerData, setFarmerData] = useState(null);
@@ -16,6 +16,11 @@ function FarmerDashboard({ privateKey, onLogout }) {
   const [bioText, setBioText] = useState('');
   const [bioSaving, setBioSaving] = useState(false);
   const [bioError, setBioError] = useState('');
+
+  // Email verification resend state
+  const [resendingEmail, setResendingEmail] = useState(false);
+  const [resendSuccess, setResendSuccess] = useState('');
+  const [resendError, setResendError] = useState('');
 
   useEffect(() => {
     fetchDashboardData();
@@ -75,6 +80,30 @@ function FarmerDashboard({ privateKey, onLogout }) {
       setBioError(err.response?.data?.error || 'Failed to save bio');
     } finally {
       setBioSaving(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    try {
+      setResendingEmail(true);
+      setResendError('');
+      setResendSuccess('');
+
+      const wallet = new ethers.Wallet(privateKey);
+      const farmerAddress = wallet.address;
+
+      const res = await axios.post('http://localhost:3002/api/farmer/resend-verification', {
+        farmerAddress
+      });
+
+      setResendSuccess(res.data.message);
+      console.log('✅ Verification email resent');
+
+    } catch (err) {
+      console.error('Error resending verification:', err);
+      setResendError(err.response?.data?.error || 'Failed to resend email');
+    } finally {
+      setResendingEmail(false);
     }
   };
 
@@ -142,6 +171,44 @@ function FarmerDashboard({ privateKey, onLogout }) {
 
   return (
     <div className="max-w-6xl mx-auto">
+      
+      {/* Email Verification Warning */}
+      {!farmer.emailVerified && (
+        <div className="bg-yellow-50 border-2 border-yellow-400 rounded-lg p-6 mb-6">
+          <div className="flex items-start gap-3">
+            <span className="text-3xl">⚠️</span>
+            <div className="flex-1">
+              <h3 className="font-bold text-yellow-800 mb-2">
+                Email Verification Required
+              </h3>
+              <p className="text-sm text-yellow-700 mb-3">
+                Please verify your email to create batches. Check your inbox for the verification link.
+              </p>
+              
+              {resendSuccess && (
+                <div className="bg-green-100 border border-green-400 text-green-700 px-3 py-2 rounded mb-3 text-sm">
+                  ✅ {resendSuccess}
+                </div>
+              )}
+              
+              {resendError && (
+                <div className="bg-red-100 border border-red-400 text-red-700 px-3 py-2 rounded mb-3 text-sm">
+                  ❌ {resendError}
+                </div>
+              )}
+              
+              <button
+                onClick={handleResendVerification}
+                disabled={resendingEmail}
+                className="bg-yellow-600 text-white px-4 py-2 rounded-lg hover:bg-yellow-700 transition font-semibold disabled:bg-gray-400 text-sm"
+              >
+                {resendingEmail ? 'Sending...' : '📧 Resend Verification Email'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex justify-between items-center mb-6">
         <div>
@@ -284,6 +351,8 @@ function FarmerDashboard({ privateKey, onLogout }) {
         <div className="mb-6">
           <CreateBatchForm
             privateKey={privateKey}
+            season={season}
+            setSeason={setSeason}
             onSuccess={handleBatchCreated}
             onCancel={() => setShowCreateBatch(false)}
           />

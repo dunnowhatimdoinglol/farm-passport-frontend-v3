@@ -3,7 +3,7 @@ import axios from 'axios';
 import { ethers } from 'ethers';
 import QRCode from 'qrcode';
 
-function CreateBatchForm({ privateKey, onBatchCreated }) {
+function CreateBatchForm({ privateKey, season, setSeason, onBatchCreated }) {
   const [batchId, setBatchId] = useState('');
   const [productType, setProductType] = useState('Vegetable');
   const [productName, setProductName] = useState('');
@@ -45,7 +45,8 @@ function CreateBatchForm({ privateKey, onBatchCreated }) {
         productType,
         productName,
         quantity: parseInt(quantity),
-        unit
+        unit,
+        season: season === 'auto' ? null : season 
       });
 
       console.log('Batch created (gasless):', response.data);
@@ -187,6 +188,27 @@ function CreateBatchForm({ privateKey, onBatchCreated }) {
               ))}
             </select>
           </div>
+          </div>
+
+        {/* Season field */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Season
+          </label>
+          <select
+            value={season}
+            onChange={(e) => setSeason(e.target.value)}
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+          >
+            <option value="auto">Auto-detect (Current Season)</option>
+            <option value="spring">🌸 Spring</option>
+            <option value="summer">🌞 Summer</option>
+            <option value="autumn">🍂 Autumn</option>
+            <option value="winter">❄️ Winter</option>
+          </select>
+          <p className="text-xs text-gray-500 mt-1">
+            Auto-detected, can override for greenhouse crops
+          </p>
         </div>
 
         {error && (
