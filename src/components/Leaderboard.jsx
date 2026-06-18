@@ -18,7 +18,7 @@ function Leaderboard({ authToken, onBack }) {
       setError('');
 
       // Fetch leaderboard
-      const res = await axios.get('http://localhost:3002/api/leaderboard', {
+      const res = await axios.get('https://farm-passport-backend-v3.onrender.com//api/leaderboard', {
         params: { period, limit: 15 }
       });
 
@@ -27,7 +27,7 @@ function Leaderboard({ authToken, onBack }) {
       // Fetch my rank if authenticated
       if (authToken) {
         try {
-          const myRankRes = await axios.get('http://localhost:3002/api/leaderboard/me', {
+          const myRankRes = await axios.get('https://farm-passport-backend-v3.onrender.com//api/leaderboard/me', {
             params: { period },
             headers: { Authorization: `Bearer ${authToken}` }
           });

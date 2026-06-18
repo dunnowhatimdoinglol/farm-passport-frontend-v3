@@ -23,7 +23,7 @@ function UnlockBadge({ batchId, farmName, onViewBadges, onBack }) {
       console.log('Unlocking badge for batch:', batchId);
 
       const response = await axios.post(
-        'http://localhost:3002/api/unlock-badge',
+        'https://farm-passport-backend-v3.onrender.com//api/unlock-badge',
         { batchId },
         {
           headers: {

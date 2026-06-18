@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import AchievementPopup from './AchievementPopup';
 
-const API_BASE = 'http://localhost:3002/api';
+const API_BASE = 'https://farm-passport-backend-v3.onrender.com//api';
 
 /**
  * ReceiptView - Updated with achievement popups

@@ -65,7 +65,7 @@ function FarmerPortal({ onBackToCustomer }) {
 
       console.log('Registering farmer (GASLESS)...');
       
-      const response = await axios.post('http://localhost:3002/api/farmer/register', {
+      const response = await axios.post('https://farm-passport-backend-v3.onrender.com//api/farmer/register', {
         farmerAddress: farmerAddr,
         email,        // Email for verification
         farmerName,   // Person's name

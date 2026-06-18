@@ -13,7 +13,7 @@ function RestaurantLogin({ onLogin, onSwitchToRegister }) {
     setLoading(true);
 
     try {
-      const response = await axios.post('http://localhost:3002/api/restaurant/auth/login', {
+      const response = await axios.post('https://farm-passport-backend-v3.onrender.com//api/restaurant/auth/login', {
         email,
         password
       });

@@ -4,7 +4,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import RestaurantLogin    from './RestaurantLogin';
 import RestaurantRegister from './RestaurantRegister';
 
-const API_BASE = 'http://localhost:3002/api';
+const API_BASE = 'https://farm-passport-backend-v3.onrender.com//api';
 
 function RestaurantPortal({ onBack }) {
   // ── Restaurant auth (self-contained, App.jsx doesn't know about this) ──

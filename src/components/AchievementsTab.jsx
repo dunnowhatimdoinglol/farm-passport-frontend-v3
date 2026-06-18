@@ -16,7 +16,7 @@ function AchievementsTab({ authToken }) {
 
   const fetchAchievements = async () => {
     try {
-      const res = await axios.get('http://localhost:3002/api/user/achievements', {
+      const res = await axios.get('https://farm-passport-backend-v3.onrender.com//api/user/achievements', {
         headers: { Authorization: `Bearer ${authToken}` }
       });
 

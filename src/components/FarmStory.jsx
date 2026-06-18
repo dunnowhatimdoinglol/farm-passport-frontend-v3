@@ -16,7 +16,7 @@ function FarmStory({ batchId, onBack, onViewBadges, viewOnly = false }) {
     try {
       console.log('Fetching batch:', batchId);
       
-      const response = await axios.get(`http://localhost:3002/api/batch/${batchId}`);
+      const response = await axios.get(`https://farm-passport-backend-v3.onrender.com//api/batch/${batchId}`);
       
       console.log('Batch data:', response.data);
 
@@ -27,7 +27,7 @@ function FarmStory({ batchId, onBack, onViewBadges, viewOnly = false }) {
         if (response.data.data?.farmer?.address) {
           try {
             const bioRes = await axios.get(
-              `http://localhost:3002/api/farmer/profile/${response.data.data.farmer.address}`
+              `https://farm-passport-backend-v3.onrender.com//api/farmer/profile/${response.data.data.farmer.address}`
             );
             setFarmerBio(bioRes.data.profile?.bio || '');
           } catch (err) {

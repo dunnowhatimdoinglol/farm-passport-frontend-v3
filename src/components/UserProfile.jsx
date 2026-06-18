@@ -32,7 +32,7 @@ function UserProfile({ authToken, onBack }) {
 
   const fetchProfile = async () => {
     try {
-      const res = await axios.get('http://localhost:3002/api/user/profile', {
+      const res = await axios.get('https://farm-passport-backend-v3.onrender.com//api/user/profile', {
         headers: { Authorization: `Bearer ${authToken}` }
       });
 
@@ -56,7 +56,7 @@ function UserProfile({ authToken, onBack }) {
       setSaveError('');
 
       await axios.put(
-        'http://localhost:3002/api/user/profile',
+        'https://farm-passport-backend-v3.onrender.com//api/user/profile',
         { username, bio },
         { headers: { Authorization: `Bearer ${authToken}` } }
       );
@@ -84,7 +84,7 @@ function UserProfile({ authToken, onBack }) {
       formData.append('image', file);
 
       await axios.post(
-        'http://localhost:3002/api/user/profile/upload-image',
+        'https://farm-passport-backend-v3.onrender.com//api/user/profile/upload-image',
         formData,
         {
           headers: {

@@ -25,7 +25,7 @@ function EmailVerificationBanner({ authToken }) {
 
   const checkVerificationStatus = async () => {
     try {
-      const res = await axios.get('http://localhost:3002/api/auth/verification-status', {
+      const res = await axios.get('https://farm-passport-backend-v3.onrender.com//api/auth/verification-status', {
         headers: { Authorization: `Bearer ${authToken}` }
       });
 
@@ -44,7 +44,7 @@ function EmailVerificationBanner({ authToken }) {
       setResendMessage('');
 
       const res = await axios.post(
-        'http://localhost:3002/api/auth/resend-verification',
+        'https://farm-passport-backend-v3.onrender.com//api/auth/resend-verification',
         {},
         { headers: { Authorization: `Bearer ${authToken}` } }
       );

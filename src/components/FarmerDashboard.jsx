@@ -31,7 +31,7 @@ function FarmerDashboard({ privateKey, season, setSeason, onLogout }) {
       setLoading(true);
       setError(null);
 
-      const response = await axios.post('http://localhost:3002/api/farmer/dashboard', {
+      const response = await axios.post('https://farm-passport-backend-v3.onrender.com//api/farmer/dashboard', {
         privateKey: privateKey
       });
 
@@ -41,7 +41,7 @@ function FarmerDashboard({ privateKey, season, setSeason, onLogout }) {
       if (response.data.farmer?.address) {
         try {
           const profileRes = await axios.get(
-            `http://localhost:3002/api/farmer/profile/${response.data.farmer.address}`
+            `https://farm-passport-backend-v3.onrender.com//api/farmer/profile/${response.data.farmer.address}`
           );
           setBioText(profileRes.data.profile?.bio || '');
         } catch (err) {
@@ -70,7 +70,7 @@ function FarmerDashboard({ privateKey, season, setSeason, onLogout }) {
       setBioError('');
 
       await axios.put(
-        `http://localhost:3002/api/farmer/profile/${farmerData.farmer.address}`,
+        `https://farm-passport-backend-v3.onrender.com//api/farmer/profile/${farmerData.farmer.address}`,
         { bio: bioText.trim() }
       );
 
@@ -92,7 +92,7 @@ function FarmerDashboard({ privateKey, season, setSeason, onLogout }) {
       const wallet = new ethers.Wallet(privateKey);
       const farmerAddress = wallet.address;
 
-      const res = await axios.post('http://localhost:3002/api/farmer/resend-verification', {
+      const res = await axios.post('https://farm-passport-backend-v3.onrender.com//api/farmer/resend-verification', {
         farmerAddress
       });
 

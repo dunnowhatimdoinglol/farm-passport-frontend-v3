@@ -39,7 +39,7 @@ function CreateBatchForm({ privateKey, season, setSeason, onBatchCreated }) {
       console.log('Farmer address:', farmerAddress);
 
       // GASLESS: Backend pays gas!
-      const response = await axios.post('http://localhost:3002/api/farmer/create-batch', {
+      const response = await axios.post('https://farm-passport-backend-v3.onrender.com//api/farmer/create-batch', {
         farmerAddress: farmerAddress,  // Include farmer address
         batchId,
         productType,

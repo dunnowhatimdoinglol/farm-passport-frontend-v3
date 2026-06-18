@@ -31,7 +31,7 @@ function VerifyEmail({ onBack }) {
         return;
       }
 
-      const res = await axios.get(`http://localhost:3002/api/auth/verify-email/${token}`);
+      const res = await axios.get(`https://farm-passport-backend-v3.onrender.com//api/auth/verify-email/${token}`);
 
       setStatus('success');
       setMessage(res.data.message);
