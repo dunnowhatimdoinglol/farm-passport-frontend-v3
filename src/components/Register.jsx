@@ -27,7 +27,7 @@ function Register({ onRegister, onSwitchToLogin }) {
     setLoading(true);
 
     try {
-      const response = await axios.post('https://farm-passport-backend-v3.onrender.com//api/auth/register', {
+      const response = await axios.post('https://farm-passport-backend-v3.onrender.com/api/auth/register', {
         email,
         password
       });

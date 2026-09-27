@@ -19,7 +19,7 @@ function BadgeCollection({ userEmail, authToken, onBack, onLoginRequired }) {
     try {
       console.log('Fetching badges...');
 
-      const response = await axios.get('https://farm-passport-backend-v3.onrender.com//api/user/badges', {
+      const response = await axios.get('https://farm-passport-backend-v3.onrender.com/api/user/badges', {
         headers: {
           'Authorization': `Bearer ${authToken}`
         }
