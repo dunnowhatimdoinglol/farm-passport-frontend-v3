@@ -267,7 +267,7 @@ function App() {
                 <p className="text-xs text-gray-400 mt-2">
                   Blockchain tx:{' '}
                   <a
-                    href={`https://sepolia.etherscan.io/tx/${successInfo.transactionHash}`}
+                    href={`https://sepolia.basescan.org/tx/${successInfo.transactionHash}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-blue-600 hover:underline font-mono"

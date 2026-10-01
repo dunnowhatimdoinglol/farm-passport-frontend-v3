@@ -266,12 +266,12 @@ function CreateBatchForm({ privateKey, season, setSeason, onBatchCreated }) {
                 You didn't pay any gas fees - our system covered it for you!
               </p>
               <a
-                href={`https://sepolia.etherscan.io/tx/${createdBatch.transactionHash}`}
+                href={`https://sepolia.basescan.org/tx/${createdBatch.transactionHash}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-blue-600 hover:underline text-xs font-mono break-all"
               >
-                View on Etherscan ↗
+                View on Basescan ↗
               </a>
             </div>
 

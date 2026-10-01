@@ -437,12 +437,12 @@ function FarmerDashboard({ privateKey, season, setSeason, onLogout }) {
                       
                       {txHash && (
                         <a
-                          href={`https://sepolia.etherscan.io/tx/${txHash}`}
+                          href={`https://sepolia.basescan.org/tx/${txHash}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-blue-600 hover:underline text-xs font-mono"
                         >
-                          View on Etherscan ↗
+                          View on Basescan ↗
                         </a>
                       )}
                     </div>

@@ -196,7 +196,7 @@ function FarmerPortal({ onBackToCustomer }) {
               <span className="font-semibold">Transaction Hash:</span>
             </p>
             <a
-              href={`https://sepolia.etherscan.io/tx/${registrationData.transactionHash}`}
+              href={`https://sepolia.basescan.org/tx/${registrationData.transactionHash}`}
               target="_blank"
               rel="noopener noreferrer"
               className="text-blue-600 hover:underline text-xs font-mono break-all"

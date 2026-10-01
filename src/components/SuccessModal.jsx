@@ -26,7 +26,7 @@ function SuccessModal({ farmName, transactionHash, onClose, onViewBadges }) {
         <div className="bg-gray-50 rounded-lg p-3 mb-6">
           <p className="text-xs text-gray-500 mb-1">Verified on Blockchain</p>
           <a
-            href={`https://sepolia.etherscan.io/tx/${transactionHash}`}
+            href={`https://sepolia.basescan.org/tx/${transactionHash}`}
             target="_blank"
             rel="noopener noreferrer"
             className="text-blue-600 hover:underline font-mono text-xs break-all"
