@@ -88,6 +88,7 @@ function RestaurantPortal({ onBack }) {
   return (
     <RestaurantReceiptForm
       restaurantUser={restaurantUser}
+      restaurantToken={restaurantToken}
       onLogout={handleRestaurantLogout}
       onBack={onBack}
     />
@@ -99,7 +100,10 @@ function RestaurantPortal({ onBack }) {
 // Separated so the batch fetch only fires once the user is
 // actually logged in.
 // ─────────────────────────────────────────────────────────
-function RestaurantReceiptForm({ restaurantUser, onLogout, onBack }) {
+function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBack }) {
+  // ── Which tab is showing: new receipt form or past receipts ──
+  const [tab, setTab] = useState('create');   // 'create' | 'history'
+
   // ── Batch list ──
   const [batches,  setBatches]  = useState([]);
   const [loading,  setLoading]  = useState(true);
@@ -322,10 +326,47 @@ function RestaurantReceiptForm({ restaurantUser, onLogout, onBack }) {
     );
   }
 
+  // ── Tabs: New Receipt / Past Receipts ──
+  const Tabs = () => (
+    <div className="bg-white rounded-lg shadow-lg p-2 flex gap-2">
+      {[
+        { key: 'create',  label: '🧾 New Receipt' },
+        { key: 'history', label: '📚 Past Receipts' },
+      ].map(t => (
+        <button
+          key={t.key}
+          onClick={() => setTab(t.key)}
+          className={`flex-1 py-2.5 rounded-lg font-semibold transition ${
+            tab === t.key
+              ? 'bg-orange-600 text-white'
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+
+  // ─── PAST RECEIPTS ───
+  if (tab === 'history') {
+    return (
+      <div className="max-w-4xl mx-auto space-y-6">
+        <Header />
+        <Tabs />
+        <ReceiptHistory restaurantToken={restaurantToken} onLogout={onLogout} />
+        <div className="text-center">
+          <button onClick={onBack} className="text-gray-600 hover:underline">← Back</button>
+        </div>
+      </div>
+    );
+  }
+
   // ─── FORM ───
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <Header />
+      <Tabs />
 
       {/* Form card */}
       <div className="bg-white rounded-lg shadow-lg p-8">
@@ -472,6 +513,137 @@ function RestaurantReceiptForm({ restaurantUser, onLogout, onBack }) {
       <div className="text-center">
         <button onClick={onBack} className="text-gray-600 hover:underline">← Back</button>
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────
+// Past receipts for the logged-in restaurant, with the
+// option to show each receipt's QR code again (e.g. reprint).
+// ─────────────────────────────────────────────────────────
+function ReceiptHistory({ restaurantToken, onLogout }) {
+  const [receipts, setReceipts] = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [error,    setError]    = useState(null);
+  const [openQR,   setOpenQR]   = useState(null);   // receiptId whose QR is showing
+
+  useEffect(() => {
+    const fetchHistory = async () => {
+      try {
+        const res = await axios.get(`${API_BASE}/restaurant/my-receipts`, {
+          headers: { Authorization: `Bearer ${restaurantToken}` }
+        });
+        setReceipts(res.data.receipts || []);
+      } catch (err) {
+        console.error('RestaurantPortal receipt history:', err);
+        if (err.response?.status === 401 || err.response?.status === 403) {
+          setError('Your session has expired. Please log out and log in again.');
+        } else {
+          setError(err.response?.data?.error || 'Could not load your receipts.');
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchHistory();
+  }, [restaurantToken]);
+
+  if (loading) {
+    return (
+      <div className="bg-white rounded-lg shadow-lg p-8 text-center">
+        <div className="text-6xl mb-4">⏳</div>
+        <p className="text-gray-600">Loading your receipts…</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="bg-white rounded-lg shadow-lg p-8 text-center">
+        <div className="text-6xl mb-4">❌</div>
+        <p className="text-red-600 mb-4">{error}</p>
+        <button onClick={onLogout} className="text-sm text-gray-600 border border-gray-300 px-4 py-2 rounded-lg hover:bg-gray-50">
+          Log out
+        </button>
+      </div>
+    );
+  }
+
+  if (receipts.length === 0) {
+    return (
+      <div className="bg-white rounded-lg shadow-lg p-8 text-center">
+        <div className="text-6xl mb-4">🧾</div>
+        <p className="text-gray-600">No receipts yet. Create one from the New Receipt tab.</p>
+      </div>
+    );
+  }
+
+  const claimedCount = receipts.filter(r => r.claimed).length;
+
+  return (
+    <div className="space-y-4">
+      {/* Summary */}
+      <div className="bg-white rounded-lg shadow-lg p-5 flex justify-around text-center">
+        <div>
+          <p className="text-2xl font-bold text-gray-800">{receipts.length}</p>
+          <p className="text-xs text-gray-500 uppercase tracking-wide">Receipts</p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-green-700">{claimedCount}</p>
+          <p className="text-xs text-gray-500 uppercase tracking-wide">Badges Claimed</p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-gray-500">{receipts.length - claimedCount}</p>
+          <p className="text-xs text-gray-500 uppercase tracking-wide">Unclaimed</p>
+        </div>
+      </div>
+
+      {/* List */}
+      {receipts.map((r) => (
+        <div key={r.receiptId} className="bg-white rounded-lg shadow-lg p-5">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="min-w-0">
+              <p className="font-bold text-gray-800">{r.productName || 'Product'}</p>
+              <p className="font-mono text-xs text-gray-500 break-all">{r.receiptId}</p>
+              <p className="text-sm text-gray-500 mt-1">
+                {new Date(r.createdAt).toLocaleString('en-GB', {
+                  day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+                })}
+              </p>
+            </div>
+            <div className="text-right">
+              {r.amountPaid !== null && r.amountPaid !== undefined && (
+                <p className="font-bold text-gray-800">£{Number(r.amountPaid).toFixed(2)}</p>
+              )}
+              {r.quantitySold !== null && r.quantitySold !== undefined && (
+                <p className="text-sm text-gray-600">{formatQty(r.quantitySold, r.unit)}</p>
+              )}
+              <span className={`inline-block mt-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                r.claimed ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
+              }`}>
+                {r.claimed ? '✅ Badge claimed' : 'Not yet claimed'}
+              </span>
+            </div>
+          </div>
+
+          <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
+            <p className="font-mono text-xs text-gray-400 break-all">Batch: {r.batchId}</p>
+            <button
+              onClick={() => setOpenQR(openQR === r.receiptId ? null : r.receiptId)}
+              className="text-sm font-semibold text-orange-600 hover:text-orange-700"
+            >
+              {openQR === r.receiptId ? 'Hide QR' : 'Show QR'}
+            </button>
+          </div>
+
+          {openQR === r.receiptId && (
+            <div className="mt-4 flex flex-col items-center border-t border-gray-100 pt-4">
+              <QRCodeSVG value={r.receiptId} size={200} includeMargin={true} bgColor="#ffffff" fgColor="#1f2937" />
+              <p className="text-xs text-gray-400 mt-2">Right-click the QR → Save image to reprint</p>
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
