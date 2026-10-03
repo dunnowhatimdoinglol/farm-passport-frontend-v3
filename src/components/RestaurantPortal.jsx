@@ -6,6 +6,10 @@ import RestaurantRegister from './RestaurantRegister';
 
 const API_BASE = 'https://farm-passport-backend-v3.onrender.com/api';
 
+// Formats a quantity with its unit, e.g. 2000 + "kg" → "2,000 kg"
+const formatQty = (amount, unit) =>
+  `${Number(amount).toLocaleString('en-GB')} ${unit || ''}`.trim();
+
 function RestaurantPortal({ onBack }) {
   // ── Restaurant auth (self-contained, App.jsx doesn't know about this) ──
   const [restaurantUser,  setRestaurantUser]  = useState(null);
@@ -104,6 +108,7 @@ function RestaurantReceiptForm({ restaurantUser, onLogout, onBack }) {
   // ── Form ──
   const [selectedBatchId, setSelectedBatchId] = useState('');
   const [amountPaid,      setAmountPaid]      = useState('');
+  const [quantitySold,    setQuantitySold]    = useState('');   // optional — wholesale stock tracking
   const [submitting,      setSubmitting]      = useState(false);
   const [submitErr,       setSubmitErr]       = useState(null);
 
@@ -129,6 +134,15 @@ function RestaurantReceiptForm({ restaurantUser, onLogout, onBack }) {
 
   const selectedBatch = batches.find(b => b.batchId === selectedBatchId) || null;
 
+  // Farm name comes from the backend as farmName (older shape: farmer.name)
+  const getFarmName = (b) => b?.farmName || b?.farmer?.name || null;
+
+  // Stock left in a batch (falls back to the original quantity)
+  const getRemaining = (b) =>
+    b?.quantityRemaining !== undefined && b?.quantityRemaining !== null
+      ? Number(b.quantityRemaining)
+      : Number(b?.quantity);
+
   // ── Submit ──
   const handleCreate = async (e) => {
     e.preventDefault();
@@ -140,6 +154,8 @@ function RestaurantReceiptForm({ restaurantUser, onLogout, onBack }) {
         batchId:        selectedBatchId,
         restaurantName: restaurantUser.restaurantName,   // from account — not user-editable
         amountPaid:     parseFloat(amountPaid),
+        // Only sent when filled in — leaving it empty skips stock tracking
+        quantitySold:   quantitySold === '' ? undefined : parseFloat(quantitySold),
       });
 
       const receipt = res.data.receipt || res.data.data || res.data;
@@ -157,6 +173,7 @@ function RestaurantReceiptForm({ restaurantUser, onLogout, onBack }) {
     setCreatedReceipt(null);
     setSelectedBatchId('');
     setAmountPaid('');
+    setQuantitySold('');
     setSubmitErr(null);
   };
 
@@ -210,6 +227,9 @@ function RestaurantReceiptForm({ restaurantUser, onLogout, onBack }) {
     const receiptId = createdReceipt.receiptId || createdReceipt.receipt_id;
     const batchId   = createdReceipt.batchId   || createdReceipt.batch_id   || selectedBatchId;
     const amount    = createdReceipt.amountPaid || createdReceipt.amount_paid || amountPaid;
+    const sold      = createdReceipt.quantitySold ?? createdReceipt.quantity_sold ?? null;
+    const unit      = createdReceipt.batch?.unit || selectedBatch?.unit || '';
+    const leftAfter = createdReceipt.batch?.quantityRemaining;
 
     return (
       <div className="max-w-4xl mx-auto space-y-6">
@@ -256,6 +276,20 @@ function RestaurantReceiptForm({ restaurantUser, onLogout, onBack }) {
               <p className="text-xs text-gray-500 uppercase tracking-wide">Amount</p>
               <p className="font-semibold text-gray-800">£{Number(amount).toFixed(2)}</p>
             </div>
+            {sold !== null && (
+              <>
+                <div>
+                  <p className="text-xs text-gray-500 uppercase tracking-wide">Quantity Sold</p>
+                  <p className="font-semibold text-gray-800">{formatQty(sold, unit)}</p>
+                </div>
+                {leftAfter !== undefined && leftAfter !== null && (
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase tracking-wide">Left in Batch</p>
+                    <p className="font-semibold text-gray-800">{formatQty(leftAfter, unit)}</p>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
 
@@ -300,7 +334,7 @@ function RestaurantReceiptForm({ restaurantUser, onLogout, onBack }) {
               {batches.map((b) => (
                 <option key={b.batchId} value={b.batchId}>
                   {b.productName || b.cropType || 'Product'} — {b.batchId}
-                  {b.farmer?.name ? ` (${b.farmer.name})` : ''}
+                  {getFarmName(b) ? ` (${getFarmName(b)})` : ''}
                 </option>
               ))}
             </select>
@@ -315,7 +349,7 @@ function RestaurantReceiptForm({ restaurantUser, onLogout, onBack }) {
                   </div>
                   <div>
                     <span className="text-gray-500">Farm:</span>{' '}
-                    <span className="font-semibold text-gray-800">{selectedBatch.farmer?.name || 'Unknown'}</span>
+                    <span className="font-semibold text-gray-800">{getFarmName(selectedBatch) || 'Unknown'}</span>
                   </div>
                   <div>
                     <span className="text-gray-500">Batch:</span>{' '}
@@ -324,7 +358,17 @@ function RestaurantReceiptForm({ restaurantUser, onLogout, onBack }) {
                   {selectedBatch.quantity && (
                     <div>
                       <span className="text-gray-500">Quantity:</span>{' '}
-                      <span className="font-semibold text-gray-800">{selectedBatch.quantity}</span>
+                      <span className="font-semibold text-gray-800">
+                        {formatQty(selectedBatch.quantity, selectedBatch.unit)}
+                      </span>
+                    </div>
+                  )}
+                  {selectedBatch.quantity && (
+                    <div>
+                      <span className="text-gray-500">Remaining:</span>{' '}
+                      <span className={`font-semibold ${getRemaining(selectedBatch) <= 0 ? 'text-red-600' : 'text-gray-800'}`}>
+                        {formatQty(getRemaining(selectedBatch), selectedBatch.unit)}
+                      </span>
                     </div>
                   )}
                 </div>
@@ -360,6 +404,33 @@ function RestaurantReceiptForm({ restaurantUser, onLogout, onBack }) {
                 required
               />
             </div>
+          </div>
+
+          {/* Quantity sold — OPTIONAL, for wholesale stock tracking */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              Quantity Sold <span className="font-normal text-gray-400">(optional)</span>
+            </label>
+            <div className="relative">
+              <input
+                type="number"
+                step="any"
+                min="0"
+                max={selectedBatch ? getRemaining(selectedBatch) : undefined}
+                value={quantitySold}
+                onChange={(e) => setQuantitySold(e.target.value)}
+                placeholder="e.g. 250"
+                className="w-full pl-4 pr-16 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+              />
+              {selectedBatch?.unit && (
+                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">
+                  {selectedBatch.unit}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-gray-400 mt-1">
+              For wholesale sales — deducted from the batch's remaining stock. Leave empty for meals.
+            </p>
           </div>
 
           {/* Submit error */}

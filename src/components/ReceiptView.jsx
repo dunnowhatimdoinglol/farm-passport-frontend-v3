@@ -139,7 +139,9 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack, onLoginRequired 
   const amountPaid     = receipt.amountPaid     || receipt.amount_paid;
   const batchId        = receipt.batchId        || receipt.batch_id;
   const farmName       = receipt.farmName       || receipt.farm_name || receipt.farmer?.farmName || 'Farm';
-  const productName    = receipt.productName    || receipt.product_name;
+  const productName    = receipt.productName    || receipt.product_name || receipt.batch?.productName;
+  const quantitySold   = receipt.quantitySold   ?? receipt.quantity_sold ?? null;
+  const unit           = receipt.batch?.unit    || '';
   const createdAt      = receipt.createdAt      || receipt.created_at;
   const expiresAt      = receipt.expiresAt      || receipt.expires_at;
   const isExpired      = expiresAt ? new Date(expiresAt) < new Date() : false;
@@ -210,6 +212,14 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack, onLoginRequired 
               <p className="text-sm text-gray-600">Receipt ID</p>
               <p className="font-mono text-sm font-semibold text-gray-800">{receiptId}</p>
             </div>
+            {quantitySold !== null && (
+              <div>
+                <p className="text-sm text-gray-600">Quantity</p>
+                <p className="font-semibold text-gray-800">
+                  {`${Number(quantitySold).toLocaleString('en-GB')} ${unit}`.trim()}
+                </p>
+              </div>
+            )}
           </div>
         </div>
       </div>
