@@ -115,20 +115,21 @@ function RestaurantReceiptForm({ restaurantUser, onLogout, onBack }) {
   // ── Success ──
   const [createdReceipt, setCreatedReceipt] = useState(null);
 
-  // ── Fetch batches ──
+  // ── Fetch batches (also re-run after each receipt so stock levels stay current) ──
+  const fetchBatches = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/restaurant/batches`);
+      const raw = res.data.batches || res.data.data || res.data;
+      setBatches(Array.isArray(raw) ? raw : []);
+    } catch (err) {
+      console.error('RestaurantPortal fetch batches:', err);
+      setFetchErr('Could not load available batches. Is the backend running on port 3002?');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchBatches = async () => {
-      try {
-        const res = await axios.get(`${API_BASE}/restaurant/batches`);
-        const raw = res.data.batches || res.data.data || res.data;
-        setBatches(Array.isArray(raw) ? raw : []);
-      } catch (err) {
-        console.error('RestaurantPortal fetch batches:', err);
-        setFetchErr('Could not load available batches. Is the backend running on port 3002?');
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchBatches();
   }, []);
 
@@ -160,6 +161,14 @@ function RestaurantReceiptForm({ restaurantUser, onLogout, onBack }) {
 
       const receipt = res.data.receipt || res.data.data || res.data;
       setCreatedReceipt(receipt);
+
+      // Update this batch's remaining stock straight away from the response
+      const newRemaining = receipt.batch?.quantityRemaining;
+      if (newRemaining !== undefined && newRemaining !== null) {
+        setBatches(prev => prev.map(b =>
+          b.batchId === selectedBatchId ? { ...b, quantityRemaining: newRemaining } : b
+        ));
+      }
     } catch (err) {
       console.error('RestaurantPortal create receipt:', err);
       setSubmitErr(err.response?.data?.error || 'Failed to create receipt.');
@@ -175,6 +184,7 @@ function RestaurantReceiptForm({ restaurantUser, onLogout, onBack }) {
     setAmountPaid('');
     setQuantitySold('');
     setSubmitErr(null);
+    fetchBatches();   // pick up any stock changes (including from other restaurants)
   };
 
   // ── Logged-in header (shared by all states below) ──
