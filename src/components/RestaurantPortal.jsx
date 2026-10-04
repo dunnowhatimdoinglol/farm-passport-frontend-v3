@@ -3,6 +3,7 @@ import axios from 'axios';
 import { QRCodeSVG } from 'qrcode.react';
 import RestaurantLogin    from './RestaurantLogin';
 import RestaurantRegister from './RestaurantRegister';
+import { AUTH_EVENT, announceAuth, clearCustomerSession } from '../authSession';
 
 const API_BASE = 'https://farm-passport-backend-v3.onrender.com/api';
 
@@ -39,16 +40,39 @@ function RestaurantPortal({ onBack }) {
     }
   }, [restaurantUser, restaurantToken]);
 
+  // Clears the restaurant session in this component only
+  const resetRestaurantSession = () => {
+    setRestaurantUser(null);
+    setRestaurantToken(null);
+    setAuthView('login');
+  };
+
   const handleRestaurantLogin = (userData, token) => {
+    // Restaurant signed in → sign the customer out
+    clearCustomerSession();
+    announceAuth({ role: 'restaurant', action: 'login', name: userData.restaurantName });
+
     setRestaurantUser(userData);
     setRestaurantToken(token);
   };
 
   const handleRestaurantLogout = () => {
-    setRestaurantUser(null);
-    setRestaurantToken(null);
-    setAuthView('login');
+    resetRestaurantSession();
+    announceAuth({ role: 'restaurant', action: 'logout' });
   };
+
+  // A customer logging in (or a logout from the header) signs the restaurant out
+  useEffect(() => {
+    const onAuthChange = (e) => {
+      const { role, action } = e.detail || {};
+      if ((role === 'customer' && action === 'login') ||
+          (role === 'restaurant' && action === 'logout')) {
+        resetRestaurantSession();
+      }
+    };
+    window.addEventListener(AUTH_EVENT, onAuthChange);
+    return () => window.removeEventListener(AUTH_EVENT, onAuthChange);
+  }, []);
 
   // ──────────────────────────────────────────────
   // NOT LOGGED IN → restaurant login / register
