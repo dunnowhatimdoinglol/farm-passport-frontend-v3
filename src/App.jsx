@@ -15,10 +15,18 @@ import RestaurantFinder from './components/RestaurantFinder';
 import EmailVerificationBanner from './components/EmailVerificationBanner';
 import VerifyEmail from './components/VerifyEmail';
 import Leaderboard from './components/Leaderboard';
+import {
+  AUTH_EVENT, announceAuth,
+  clearCustomerSession, clearRestaurantSession, readRestaurantSession
+} from './authSession';
+
 function App() {
   // ── Auth state ──
   const [user,     setUser]     = useState(null);
   const [token,    setToken]    = useState(null);
+
+  // ── Restaurant sign-in (only one of customer / restaurant at a time) ──
+  const [restaurantName, setRestaurantName] = useState(null);
   
   // ── Auth modal state (login/register overlays) ──
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -35,6 +43,7 @@ function App() {
 
   // ── Restore session from localStorage on first render ──
   useEffect(() => {
+    let customerRestored = false;
     try {
       const saved = localStorage.getItem('fp_auth');
       if (saved) {
@@ -42,10 +51,37 @@ function App() {
         if (u && t) {
           setUser(u);
           setToken(t);
+          customerRestored = true;
           console.log('User authenticated:', u.email);
         }
       }
     } catch (_) {}
+
+    // If both logins were saved (from before this change), keep the customer one
+    const restaurant = readRestaurantSession();
+    if (restaurant && customerRestored) {
+      clearRestaurantSession();
+    } else if (restaurant) {
+      setRestaurantName(restaurant.user.restaurantName);
+    }
+  }, []);
+
+  // ── React to the restaurant portal logging in / out ──
+  useEffect(() => {
+    const onAuthChange = (e) => {
+      const { role, action, name } = e.detail || {};
+      if (role === 'restaurant' && action === 'login') {
+        // Restaurant signed in → sign the customer out
+        setUser(null);
+        setToken(null);
+        setRestaurantName(name || 'Restaurant');
+      }
+      if (role === 'restaurant' && action === 'logout') {
+        setRestaurantName(null);
+      }
+    };
+    window.addEventListener(AUTH_EVENT, onAuthChange);
+    return () => window.removeEventListener(AUTH_EVENT, onAuthChange);
   }, []);
 
   // Check if URL contains verification token
@@ -69,14 +105,27 @@ function App() {
 
   // ── Auth handlers ──
   const handleLogin = (userData, jwtToken) => {
+    // Customer signed in → sign the restaurant out
+    clearRestaurantSession();
+    setRestaurantName(null);
+    announceAuth({ role: 'customer', action: 'login' });
+
     setUser(userData);
     setToken(jwtToken);
     setShowAuthModal(false);
   };
 
   const handleLogout = () => {
+    clearCustomerSession();
     setUser(null);
     setToken(null);
+    setCurrentView('scanner');
+  };
+
+  const handleRestaurantLogout = () => {
+    clearRestaurantSession();
+    setRestaurantName(null);
+    announceAuth({ role: 'restaurant', action: 'logout' });
     setCurrentView('scanner');
   };
 
@@ -211,12 +260,26 @@ function App() {
                   🍽️ Restaurant
                 </button>
 
-                <button
-                  onClick={openLoginModal}
-                  className="bg-gray-700 text-white px-4 py-1.5 rounded-lg font-semibold hover:bg-gray-800 transition text-sm"
-                >
-                  Login
-                </button>
+                {restaurantName ? (
+                  <>
+                    <button
+                      onClick={handleRestaurantLogout}
+                      className="text-gray-500 hover:text-gray-700 font-semibold text-sm"
+                    >
+                      Logout
+                    </button>
+                    <p className="text-xs text-gray-400 w-full mt-1">
+                      🍽️ Signed in as <strong>{restaurantName}</strong> (restaurant account)
+                    </p>
+                  </>
+                ) : (
+                  <button
+                    onClick={openLoginModal}
+                    className="bg-gray-700 text-white px-4 py-1.5 rounded-lg font-semibold hover:bg-gray-800 transition text-sm"
+                  >
+                    Login
+                  </button>
+                )}
               </>
             )}
           </div>
