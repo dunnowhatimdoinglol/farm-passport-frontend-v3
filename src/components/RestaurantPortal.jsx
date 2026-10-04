@@ -104,6 +104,52 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
   // ── Which tab is showing: new receipt form or past receipts ──
   const [tab, setTab] = useState('create');   // 'create' | 'history'
 
+  // ── Email verification (checked live from the backend) ──
+  const [emailVerified, setEmailVerified] = useState(restaurantUser.emailVerified ?? null);
+  const [verifyMsg,     setVerifyMsg]     = useState(null);
+  const [verifyBusy,    setVerifyBusy]    = useState(false);
+  const authHeader = { headers: { Authorization: `Bearer ${restaurantToken}` } };
+
+  const checkVerification = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/restaurant/auth/status`, authHeader);
+      setEmailVerified(!!res.data.emailVerified);
+      return !!res.data.emailVerified;
+    } catch (err) {
+      console.error('Restaurant verification status:', err);
+      if (err.response?.status === 401 || err.response?.status === 403) {
+        setVerifyMsg('Your session has expired. Please log out and log in again.');
+      }
+      return false;
+    }
+  };
+
+  useEffect(() => {
+    checkVerification();
+  }, [restaurantToken]);
+
+  const handleResend = async () => {
+    setVerifyBusy(true);
+    setVerifyMsg(null);
+    try {
+      const res = await axios.post(`${API_BASE}/restaurant/auth/resend-verification`, {}, authHeader);
+      if (res.data.alreadyVerified) setEmailVerified(true);
+      setVerifyMsg(res.data.message || 'Verification email sent!');
+    } catch (err) {
+      setVerifyMsg(err.response?.data?.error || 'Could not resend the email. Please try again.');
+    } finally {
+      setVerifyBusy(false);
+    }
+  };
+
+  const handleCheckAgain = async () => {
+    setVerifyBusy(true);
+    setVerifyMsg(null);
+    const verified = await checkVerification();
+    if (!verified) setVerifyMsg("Still not verified — click the link in your email, then try again.");
+    setVerifyBusy(false);
+  };
+
   // ── Batch list ──
   const [batches,  setBatches]  = useState([]);
   const [loading,  setLoading]  = useState(true);
@@ -157,11 +203,10 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
     try {
       const res = await axios.post(`${API_BASE}/restaurant/create-receipt`, {
         batchId:        selectedBatchId,
-        restaurantName: restaurantUser.restaurantName,   // from account — not user-editable
         amountPaid:     parseFloat(amountPaid),
         // Only sent when filled in — leaving it empty skips stock tracking
         quantitySold:   quantitySold === '' ? undefined : parseFloat(quantitySold),
-      });
+      }, authHeader);   // restaurant name now comes from the login on the backend
 
       const receipt = res.data.receipt || res.data.data || res.data;
       setCreatedReceipt(receipt);
@@ -175,6 +220,7 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
       }
     } catch (err) {
       console.error('RestaurantPortal create receipt:', err);
+      if (err.response?.data?.code === 'EMAIL_NOT_VERIFIED') setEmailVerified(false);
       setSubmitErr(err.response?.data?.error || 'Failed to create receipt.');
     } finally {
       setSubmitting(false);
@@ -362,10 +408,39 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
     );
   }
 
+  // ── Banner shown until the restaurant has verified its email ──
+  const VerifyBanner = () => (
+    <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-5">
+      <p className="font-bold text-yellow-800">⚠️ Please verify your email</p>
+      <p className="text-sm text-yellow-700 mt-1">
+        Check your inbox at <strong>{restaurantUser.email}</strong> for the verification link.
+        You can create receipts once your email is verified.
+      </p>
+      <div className="flex gap-2 mt-3 flex-wrap">
+        <button
+          onClick={handleResend}
+          disabled={verifyBusy}
+          className="bg-yellow-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-yellow-700 transition disabled:bg-gray-400"
+        >
+          Resend email
+        </button>
+        <button
+          onClick={handleCheckAgain}
+          disabled={verifyBusy}
+          className="bg-white text-yellow-800 text-sm font-semibold px-4 py-2 rounded-lg border border-yellow-400 hover:bg-yellow-100 transition disabled:opacity-50"
+        >
+          I've verified
+        </button>
+      </div>
+      {verifyMsg && <p className="text-sm text-yellow-800 mt-2">{verifyMsg}</p>}
+    </div>
+  );
+
   // ─── FORM ───
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <Header />
+      {emailVerified === false && <VerifyBanner />}
       <Tabs />
 
       {/* Form card */}
@@ -494,10 +569,12 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
           {/* Submit */}
           <button
             type="submit"
-            disabled={submitting}
+            disabled={submitting || emailVerified === false}
             className="w-full bg-orange-600 text-white py-3 rounded-lg font-bold text-lg hover:bg-orange-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed"
           >
-            {submitting ? '⏳ Creating receipt…' : '🧾 Generate Receipt QR'}
+            {submitting               ? '⏳ Creating receipt…'
+             : emailVerified === false ? '🔒 Verify your email to create receipts'
+             :                           '🧾 Generate Receipt QR'}
           </button>
         </form>
       </div>
