@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import UnlockBadge from './UnlockBadge';
+import JourneyTimeline from './JourneyTimeline';
 
 function FarmStory({ batchId, onBack, onViewBadges, viewOnly = false }) {
   const [batchData, setBatchData] = useState(null);
@@ -159,6 +160,13 @@ function FarmStory({ batchId, onBack, onViewBadges, viewOnly = false }) {
           </div>
         )}
       </div>
+
+      {/* On-chain journey: batch registration + every checkpoint */}
+      <JourneyTimeline
+        batchId={batchData.batchId}
+        registeredAt={batchData.harvestDate}
+        creationTxHash={batchData.creationTxHash}
+      />
 
       {/* Badge section - conditional based on viewOnly */}
       {viewOnly ? (

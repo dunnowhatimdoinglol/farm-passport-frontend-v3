@@ -15,6 +15,7 @@ import RestaurantFinder from './components/RestaurantFinder';
 import EmailVerificationBanner from './components/EmailVerificationBanner';
 import VerifyEmail from './components/VerifyEmail';
 import Leaderboard from './components/Leaderboard';
+import CheckpointPage from './components/CheckpointPage';
 import {
   AUTH_EVENT, announceAuth,
   clearCustomerSession, clearRestaurantSession, readRestaurantSession
@@ -91,6 +92,9 @@ function App() {
     
     if (token) {
       setCurrentView('verify-email');
+    } else if (window.location.pathname.startsWith('/checkpoint')) {
+      // Opened from an NFC sticker: /checkpoint?batch=...&stage=...
+      setCurrentView('checkpoint');
     }
   }, []);
 
@@ -155,6 +159,10 @@ function App() {
 
   // ── Navigation helpers ──
   const handleBackToScanner = () => {
+    // Leaving a sticker/verification link → reset the address bar to the homepage
+    if (window.location.pathname !== '/' || window.location.search) {
+      window.history.replaceState({}, '', '/');
+    }
     setCurrentBatchId(null);
     setCurrentReceiptId(null);
     setShowSuccessModal(false);
@@ -414,6 +422,10 @@ function App() {
           <RestaurantPortal
             onBack={handleBackToScanner}
           />
+        )}
+
+        {currentView === 'checkpoint' && (
+          <CheckpointPage onBack={handleBackToScanner} />
         )}
 
         {currentView === 'leaderboard' && (
