@@ -152,6 +152,24 @@ function CheckpointPage({ onBack }) {
       const signer   = await provider.getSigner();
       const contract = new ethers.Contract(config.contractAddress, CHECKPOINT_ABI, signer);
 
+      // Catch accidental double taps: same wallet + same stage within 10 minutes
+      try {
+        const existing = await axios.get(`${API_BASE}/batch/${encodeURIComponent(batchId)}/checkpoints`);
+        const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
+        const recentDuplicate = (existing.data.checkpoints || []).some(c =>
+          c.recordedBy?.toLowerCase() === account?.toLowerCase() &&
+          (c.stage || '').toLowerCase() === stage.trim().toLowerCase() &&
+          new Date(c.recordedAt).getTime() > tenMinutesAgo
+        );
+        if (recentDuplicate && !window.confirm(
+          `This wallet already recorded a "${stage.trim()}" checkpoint for this batch in the last 10 minutes.\n\nRecord another one anyway?`
+        )) {
+          return;
+        }
+      } catch (_) {
+        // If the check fails, carry on — the contract still protects the data
+      }
+
       // Dry run first, so contract errors show clearly instead of as a failed transaction
       await contract.addCheckpoint.staticCall(batchId, stage.trim(), location.trim(), notes.trim());
 
@@ -358,9 +376,17 @@ function CheckpointPage({ onBack }) {
       </div>
 
       {/* Journey so far */}
-      <JourneyTimeline batchId={batchId} refreshKey={refreshKey} />
+      <JourneyTimeline
+        batchId={batchId}
+        refreshKey={refreshKey}
+        registeredAt={batch.harvestDate}
+        creationTxHash={batch.creationTxHash}
+        farmName={batch.farmer?.name}
+        farmLocation={batch.farmer?.location}
+      />
 
-      {/* Sticker links (for programming NFC tags) */}
+      {/* Sticker links (for programming NFC tags) — only shown to authorised wallets */}
+      {handler?.authorized && (
       <details className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-sm">
         <summary className="font-semibold text-gray-700 cursor-pointer">🏷️ NFC sticker links for this page</summary>
         <p className="text-gray-500 mt-2">Write one of these to the sticker with an NFC app (e.g. NFC Tools):</p>
@@ -369,6 +395,7 @@ function CheckpointPage({ onBack }) {
         <p className="mt-2 text-gray-700 font-semibold">Opens in the normal browser:</p>
         <p className="font-mono text-xs break-all bg-white border rounded p-2">{pageUrl}</p>
       </details>
+      )}
 
       <div className="text-center">
         <button onClick={onBack} className="text-gray-600 hover:underline">← Back</button>

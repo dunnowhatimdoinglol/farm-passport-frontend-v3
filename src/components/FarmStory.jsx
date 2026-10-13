@@ -166,6 +166,8 @@ function FarmStory({ batchId, onBack, onViewBadges, viewOnly = false }) {
         batchId={batchData.batchId}
         registeredAt={batchData.harvestDate}
         creationTxHash={batchData.creationTxHash}
+        farmName={batchData.farmer?.name}
+        farmLocation={batchData.farmer?.location}
       />
 
       {/* Badge section - conditional based on viewOnly */}

@@ -23,8 +23,17 @@ const iconFor = (stage) => STAGE_ICONS[(stage || '').toLowerCase()] || '📍';
  *   refreshKey     – change it to re-load (e.g. after recording a checkpoint)
  *   registeredAt   – optional: batch creation date, shown as the first step
  *   creationTxHash – optional: batch creation transaction, linked on Basescan
+ *   farmName       – optional: shown on the first step ("Harvested & registered by …")
+ *   farmLocation   – optional: shown on the first step
  */
-function JourneyTimeline({ batchId, refreshKey = 0, registeredAt = null, creationTxHash = null }) {
+function JourneyTimeline({
+  batchId,
+  refreshKey = 0,
+  registeredAt = null,
+  creationTxHash = null,
+  farmName = null,
+  farmLocation = null,
+}) {
   const [checkpoints, setCheckpoints] = useState([]);
   const [loading,     setLoading]     = useState(true);
   const [error,       setError]       = useState(null);
@@ -56,21 +65,25 @@ function JourneyTimeline({ batchId, refreshKey = 0, registeredAt = null, creatio
   if (registeredAt || creationTxHash) {
     steps.push({
       key: 'registered',
-      icon: '📝',
-      title: 'Batch registered on-chain',
-      subtitle: null,
+      icon: '🌾',
+      title: farmName ? `Harvested & registered by ${farmName}` : 'Harvested & registered on-chain',
+      subtitle: farmLocation || null,
       notes: null,
       date: registeredAt,
       txHash: creationTxHash,
     });
   }
   checkpoints.forEach((c) => {
+    const isSale = (c.stage || '').toLowerCase() === 'sold';
     steps.push({
       key: `cp-${c.index}`,
       icon: iconFor(c.stage),
-      title: c.stage,
-      subtitle: [c.location, c.recorderName && c.recorderName !== c.location ? `by ${c.recorderName}` : null]
-        .filter(Boolean).join(' · '),
+      // Sales: the location is the seller, so read "Sold by Earth To Mouth Cafe"
+      title: isSale && c.location ? `Sold by ${c.location}` : c.stage,
+      subtitle: isSale
+        ? null
+        : [c.location, c.recorderName && c.recorderName !== c.location ? `by ${c.recorderName}` : null]
+            .filter(Boolean).join(' · '),
       notes: c.notes,
       date: c.recordedAt,
       txHash: c.txHash,
