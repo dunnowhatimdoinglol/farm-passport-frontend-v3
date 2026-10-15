@@ -126,7 +126,7 @@ function RestaurantPortal({ onBack }) {
 // ─────────────────────────────────────────────────────────
 function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBack }) {
   // ── Which tab is showing: new receipt form or past receipts ──
-  const [tab, setTab] = useState('create');   // 'create' | 'history'
+  const [tab, setTab] = useState('create');   // 'create' | 'deliveries' | 'history'
 
   // ── Email verification (checked live from the backend) ──
   const [emailVerified, setEmailVerified] = useState(restaurantUser.emailVerified ?? null);
@@ -203,8 +203,23 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
     }
   };
 
+  // ── This restaurant's own stock (from confirmed deliveries) ──
+  const [myStock, setMyStock] = useState({});   // { [batchId]: { quantityReceived, quantityRemaining } }
+
+  const fetchMyStock = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/restaurant/my-stock`, authHeader);
+      const map = {};
+      (res.data.stock || []).forEach(s => { map[s.batchId] = s; });
+      setMyStock(map);
+    } catch (err) {
+      console.error('RestaurantPortal my stock:', err);
+    }
+  };
+
   useEffect(() => {
     fetchBatches();
+    fetchMyStock();
   }, []);
 
   const selectedBatch = batches.find(b => b.batchId === selectedBatchId) || null;
@@ -212,11 +227,14 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
   // Farm name comes from the backend as farmName (older shape: farmer.name)
   const getFarmName = (b) => b?.farmName || b?.farmer?.name || null;
 
-  // Stock left in a batch (falls back to the original quantity)
+  // Stock still at the farm, i.e. not yet delivered anywhere (falls back to the original quantity)
   const getRemaining = (b) =>
     b?.quantityRemaining !== undefined && b?.quantityRemaining !== null
       ? Number(b.quantityRemaining)
       : Number(b?.quantity);
+
+  // This restaurant's own stock of a batch (0 if no delivery confirmed yet)
+  const getMyStock = (b) => Number(myStock[b?.batchId]?.quantityRemaining ?? 0);
 
   // ── Submit ──
   const handleCreate = async (e) => {
@@ -235,12 +253,13 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
       const receipt = res.data.receipt || res.data.data || res.data;
       setCreatedReceipt(receipt);
 
-      // Update this batch's remaining stock straight away from the response
-      const newRemaining = receipt.batch?.quantityRemaining;
+      // Update this restaurant's stock straight away from the response
+      const newRemaining = receipt.myStockRemaining;
       if (newRemaining !== undefined && newRemaining !== null) {
-        setBatches(prev => prev.map(b =>
-          b.batchId === selectedBatchId ? { ...b, quantityRemaining: newRemaining } : b
-        ));
+        setMyStock(prev => ({
+          ...prev,
+          [selectedBatchId]: { ...(prev[selectedBatchId] || { batchId: selectedBatchId }), quantityRemaining: newRemaining },
+        }));
       }
     } catch (err) {
       console.error('RestaurantPortal create receipt:', err);
@@ -259,6 +278,7 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
     setQuantitySold('');
     setSubmitErr(null);
     fetchBatches();   // pick up any stock changes (including from other restaurants)
+    fetchMyStock();
   };
 
   // ── Logged-in header (shared by all states below) ──
@@ -313,7 +333,7 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
     const amount    = createdReceipt.amountPaid || createdReceipt.amount_paid || amountPaid;
     const sold      = createdReceipt.quantitySold ?? createdReceipt.quantity_sold ?? null;
     const unit      = createdReceipt.batch?.unit || selectedBatch?.unit || '';
-    const leftAfter = createdReceipt.batch?.quantityRemaining;
+    const leftAfter = createdReceipt.myStockRemaining;
 
     return (
       <div className="max-w-4xl mx-auto space-y-6">
@@ -368,7 +388,7 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
                 </div>
                 {leftAfter !== undefined && leftAfter !== null && (
                   <div>
-                    <p className="text-xs text-gray-500 uppercase tracking-wide">Left in Batch</p>
+                    <p className="text-xs text-gray-500 uppercase tracking-wide">Your Stock Left</p>
                     <p className="font-semibold text-gray-800">{formatQty(leftAfter, unit)}</p>
                   </div>
                 )}
@@ -400,8 +420,9 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
   const Tabs = () => (
     <div className="bg-white rounded-lg shadow-lg p-2 flex gap-2">
       {[
-        { key: 'create',  label: '🧾 New Receipt' },
-        { key: 'history', label: '📚 Past Receipts' },
+        { key: 'create',     label: '🧾 New Receipt' },
+        { key: 'deliveries', label: '🚚 Deliveries' },
+        { key: 'history',    label: '📚 Past Receipts' },
       ].map(t => (
         <button
           key={t.key}
@@ -425,6 +446,28 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
         <Header />
         <Tabs />
         <ReceiptHistory restaurantToken={restaurantToken} onLogout={onLogout} />
+        <div className="text-center">
+          <button onClick={onBack} className="text-gray-600 hover:underline">← Back</button>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── DELIVERIES ───
+  if (tab === 'deliveries') {
+    return (
+      <div className="max-w-4xl mx-auto space-y-6">
+        <Header />
+        <Tabs />
+        <Deliveries
+          batches={batches}
+          myStock={myStock}
+          authHeader={authHeader}
+          emailVerified={emailVerified}
+          getFarmName={getFarmName}
+          getRemaining={getRemaining}
+          onConfirmed={() => { fetchBatches(); fetchMyStock(); }}
+        />
         <div className="text-center">
           <button onClick={onBack} className="text-gray-600 hover:underline">← Back</button>
         </div>
@@ -515,12 +558,18 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
                   )}
                   {selectedBatch.quantity && (
                     <div>
-                      <span className="text-gray-500">Remaining:</span>{' '}
-                      <span className={`font-semibold ${getRemaining(selectedBatch) <= 0 ? 'text-red-600' : 'text-gray-800'}`}>
+                      <span className="text-gray-500">Still at farm:</span>{' '}
+                      <span className="font-semibold text-gray-800">
                         {formatQty(getRemaining(selectedBatch), selectedBatch.unit)}
                       </span>
                     </div>
                   )}
+                  <div>
+                    <span className="text-gray-500">Your stock:</span>{' '}
+                    <span className={`font-semibold ${getMyStock(selectedBatch) <= 0 ? 'text-red-600' : 'text-gray-800'}`}>
+                      {formatQty(getMyStock(selectedBatch), selectedBatch.unit)}
+                    </span>
+                  </div>
                 </div>
               </div>
             )}
@@ -566,7 +615,7 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
                 type="number"
                 step="any"
                 min="0"
-                max={selectedBatch ? getRemaining(selectedBatch) : undefined}
+                max={selectedBatch ? getMyStock(selectedBatch) : undefined}
                 value={quantitySold}
                 onChange={(e) => setQuantitySold(e.target.value)}
                 placeholder="e.g. 250"
@@ -579,7 +628,7 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
               )}
             </div>
             <p className="text-xs text-gray-400 mt-1">
-              For wholesale sales — deducted from the batch's remaining stock. Leave empty for meals.
+              For wholesale sales — deducted from your stock (confirm deliveries in the Deliveries tab). Leave empty for meals.
             </p>
           </div>
 
@@ -613,6 +662,175 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
 
       <div className="text-center">
         <button onClick={onBack} className="text-gray-600 hover:underline">← Back</button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────
+// Deliveries — the restaurant confirms what it received.
+// The backend moves that amount from "still at farm" into
+// this restaurant's stock and records a "Delivered"
+// checkpoint on-chain (no wallet needed).
+// ─────────────────────────────────────────────────────────
+function Deliveries({ batches, myStock, authHeader, emailVerified, getFarmName, getRemaining, onConfirmed }) {
+  const [batchId,    setBatchId]    = useState('');
+  const [quantity,   setQuantity]   = useState('');
+  const [notes,      setNotes]      = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error,      setError]      = useState(null);
+  const [confirmed,  setConfirmed]  = useState(null);
+
+  const batch = batches.find(b => b.batchId === batchId) || null;
+  const stockRows = Object.values(myStock);
+  const batchById = (id) => batches.find(b => b.batchId === id);
+
+  const handleConfirm = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    setConfirmed(null);
+    try {
+      const res = await axios.post(`${API_BASE}/restaurant/confirm-delivery`, {
+        batchId,
+        quantityReceived: parseFloat(quantity),
+        notes: notes.trim() || undefined,
+      }, authHeader);
+      setConfirmed(res.data.delivery);
+      setBatchId('');
+      setQuantity('');
+      setNotes('');
+      onConfirmed();
+    } catch (err) {
+      console.error('Confirm delivery:', err);
+      setError(err.response?.data?.error || 'Could not confirm the delivery.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Confirm a delivery */}
+      <div className="bg-white rounded-lg shadow-lg p-8">
+        <h3 className="text-lg font-bold text-gray-800 mb-1">🚚 Confirm a delivery</h3>
+        <p className="text-sm text-gray-500 mb-5">
+          When stock arrives, record how much you received. It's added to your stock and recorded on the blockchain.
+        </p>
+
+        <form onSubmit={handleConfirm} className="space-y-5">
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">Batch</label>
+            <select
+              value={batchId}
+              onChange={(e) => setBatchId(e.target.value)}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white"
+              required
+            >
+              <option value="">— Choose a batch —</option>
+              {batches.filter(b => getRemaining(b) > 0).map((b) => (
+                <option key={b.batchId} value={b.batchId}>
+                  {b.productName || b.cropType || 'Product'} — {b.batchId}
+                  {getFarmName(b) ? ` (${getFarmName(b)})` : ''}
+                </option>
+              ))}
+            </select>
+            {batch && (
+              <p className="text-sm text-gray-600 mt-2">
+                Still at farm: <strong>{formatQty(getRemaining(batch), batch.unit)}</strong>
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">Quantity received</label>
+            <div className="relative">
+              <input
+                type="number"
+                step="any"
+                min="0.01"
+                max={batch ? getRemaining(batch) : undefined}
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+                placeholder="e.g. 50"
+                className="w-full pl-4 pr-16 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                required
+              />
+              {batch?.unit && (
+                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">{batch.unit}</span>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              Notes <span className="font-normal text-gray-400">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              maxLength={200}
+              placeholder="e.g. Arrived chilled, good condition"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+            />
+          </div>
+
+          {error && (
+            <div className="bg-red-50 border border-red-300 rounded-lg p-3">
+              <p className="text-red-600 text-sm font-semibold">⚠️ {error}</p>
+            </div>
+          )}
+
+          {confirmed && (
+            <div className="bg-green-50 border border-green-300 rounded-lg p-3">
+              <p className="text-green-700 font-semibold">
+                ✅ Delivery confirmed: {formatQty(confirmed.quantityReceived, confirmed.unit)} of {confirmed.batchId}
+              </p>
+              <p className="text-sm text-green-700">
+                Your stock: {formatQty(confirmed.myStockRemaining, confirmed.unit)} · The on-chain record appears in the batch journey in a few seconds.
+              </p>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={submitting || emailVerified === false}
+            className="w-full bg-orange-600 text-white py-3 rounded-lg font-bold text-lg hover:bg-orange-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed"
+          >
+            {submitting               ? '⏳ Confirming…'
+             : emailVerified === false ? '🔒 Verify your email first'
+             :                           '✅ Confirm delivery'}
+          </button>
+        </form>
+      </div>
+
+      {/* My stock */}
+      <div className="bg-white rounded-lg shadow-lg p-8">
+        <h3 className="text-lg font-bold text-gray-800 mb-4">📦 Your stock</h3>
+        {stockRows.length === 0 ? (
+          <p className="text-gray-500 text-sm">No deliveries confirmed yet.</p>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {stockRows.map((s) => {
+              const b = batchById(s.batchId);
+              return (
+                <div key={s.batchId} className="py-3 flex items-center justify-between gap-4 flex-wrap">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-gray-800">{b?.productName || b?.cropType || 'Product'}</p>
+                    <p className="font-mono text-xs text-gray-500 break-all">{s.batchId}</p>
+                  </div>
+                  <div className="text-right text-sm">
+                    <p className={`font-bold ${Number(s.quantityRemaining) <= 0 ? 'text-red-600' : 'text-gray-800'}`}>
+                      {formatQty(s.quantityRemaining, b?.unit)} left
+                    </p>
+                    <p className="text-gray-500">of {formatQty(s.quantityReceived, b?.unit)} received</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

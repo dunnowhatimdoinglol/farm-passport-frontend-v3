@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import AchievementPopup from './AchievementPopup';
+import JourneyTimeline from './JourneyTimeline';
 
 const API_BASE = 'https://farm-passport-backend-v3.onrender.com/api';
 
@@ -223,6 +224,18 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack, onLoginRequired 
           </div>
         </div>
       </div>
+
+      {/* Journey — this restaurant's share is highlighted and opened */}
+      {batchId && (
+        <JourneyTimeline
+          batchId={batchId}
+          registeredAt={receipt.batch?.createdAt || null}
+          creationTxHash={receipt.batch?.creationTxHash || null}
+          farmName={farmName}
+          farmLocation={receipt.farmer?.location || null}
+          highlightDestination={restaurantName}
+        />
+      )}
 
       {isExpired && (
         <div className="bg-orange-50 border border-orange-300 rounded-lg p-4 text-center">

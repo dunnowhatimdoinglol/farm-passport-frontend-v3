@@ -16,14 +16,13 @@ const BASE_SEPOLIA = {
 
 // Only the one function this page needs from the checkpoint contract
 const CHECKPOINT_ABI = [
-  'function addCheckpoint(string _batchId, string _stage, string _location, string _notes)',
+  'function addCheckpoint(string _batchId, string _stage, string _location, string _destination, string _notes)',
 ];
-
-const STAGES = ['Farm', 'Warehouse', 'Transport', 'Restaurant', 'Consumer'];
 
 /**
  * CheckpointPage — opened from an NFC sticker, e.g.
  *   /checkpoint?batch=KG-RED-03102026-001&stage=Warehouse&location=Bristol%20Depot
+ *   (optional &destination=Earth%20To%20Mouth%20Cafe for a step that belongs to one cafe's share)
  * The connected wallet signs addCheckpoint itself (it pays its own gas).
  */
 function CheckpointPage({ onBack }) {
@@ -33,6 +32,7 @@ function CheckpointPage({ onBack }) {
   // ── Form ──
   const [stage,    setStage]    = useState(params.get('stage') || 'Warehouse');
   const [location, setLocation] = useState(params.get('location') || '');
+  const [destination, setDestination] = useState(params.get('destination') || '');
   const [notes,    setNotes]    = useState('');
 
   // ── Data ──
@@ -42,7 +42,7 @@ function CheckpointPage({ onBack }) {
 
   // ── Wallet ──
   const [account,    setAccount]    = useState(null);
-  const [handler,    setHandler]    = useState(null);   // { authorized, role, name }
+  const [handler,    setHandler]    = useState(null);   // { authorized, role, name, stages }
   const [walletErr,  setWalletErr]  = useState(null);
 
   // ── Recording ──
@@ -83,6 +83,11 @@ function CheckpointPage({ onBack }) {
       setHandler(res.data);
       // Default the location to the handler's name if the sticker didn't set one
       if (res.data.name && !params.get('location')) setLocation(res.data.name);
+      // Lock the stage to what this wallet is allowed to record (set on the contract)
+      const allowed = res.data.stages || [];
+      if (allowed.length > 0) {
+        setStage(current => (allowed.includes(current) ? current : allowed[0]));
+      }
     } catch (err) {
       console.error('Handler check:', err);
     }
@@ -171,10 +176,10 @@ function CheckpointPage({ onBack }) {
       }
 
       // Dry run first, so contract errors show clearly instead of as a failed transaction
-      await contract.addCheckpoint.staticCall(batchId, stage.trim(), location.trim(), notes.trim());
+      await contract.addCheckpoint.staticCall(batchId, stage.trim(), location.trim(), destination.trim(), notes.trim());
 
       setStatus('signing');
-      const tx = await contract.addCheckpoint(batchId, stage.trim(), location.trim(), notes.trim());
+      const tx = await contract.addCheckpoint(batchId, stage.trim(), location.trim(), destination.trim(), notes.trim());
       setTxHash(tx.hash);
 
       setStatus('mining');
@@ -212,6 +217,7 @@ function CheckpointPage({ onBack }) {
 
   const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '');
   const busy = ['signing', 'mining', 'saving'].includes(status);
+  const allowedStages = handler?.stages || [];
 
   // ─── Load error ───
   if (loadError) {
@@ -244,6 +250,13 @@ function CheckpointPage({ onBack }) {
         <p className="text-gray-600">from <strong>{batch.farmer?.name}</strong></p>
         <p className="font-mono text-xs text-gray-400 mt-1 break-all">{batchId}</p>
       </div>
+
+      {/* Emergency pause (set by the contract owner) */}
+      {config.paused && (
+        <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-4">
+          <p className="text-yellow-800 font-semibold">⏸️ Checkpoint recording is paused right now. Please try again later.</p>
+        </div>
+      )}
 
       {/* Wallet */}
       <div className="bg-white rounded-lg shadow-lg p-6">
@@ -296,25 +309,21 @@ function CheckpointPage({ onBack }) {
 
         <div>
           <label className="block text-sm font-semibold text-gray-700 mb-1">Stage</label>
-          <select
-            value={STAGES.includes(stage) ? stage : '__custom'}
-            onChange={(e) => setStage(e.target.value === '__custom' ? '' : e.target.value)}
-            disabled={busy}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg bg-white"
-          >
-            {STAGES.map(s => <option key={s} value={s}>{s}</option>)}
-            <option value="__custom">Other…</option>
-          </select>
-          {!STAGES.includes(stage) && (
-            <input
-              type="text"
+          {allowedStages.length > 1 ? (
+            <select
               value={stage}
               onChange={(e) => setStage(e.target.value)}
-              placeholder="e.g. Processing"
               disabled={busy}
-              className="w-full mt-2 px-4 py-3 border border-gray-300 rounded-lg"
-            />
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg bg-white"
+            >
+              {allowedStages.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          ) : (
+            <p className="w-full px-4 py-3 border border-gray-200 rounded-lg bg-gray-50 text-gray-800 font-semibold">
+              {allowedStages[0] || stage || '—'}
+            </p>
           )}
+          <p className="text-xs text-gray-400 mt-1">Set by this wallet's permissions on the contract.</p>
         </div>
 
         <div>
@@ -324,9 +333,28 @@ function CheckpointPage({ onBack }) {
             value={location}
             onChange={(e) => setLocation(e.target.value)}
             placeholder="e.g. Bristol Depot"
+            maxLength={100}
             disabled={busy}
             className="w-full px-4 py-3 border border-gray-300 rounded-lg"
           />
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 mb-1">
+            Destination <span className="font-normal text-gray-400">(optional)</span>
+          </label>
+          <input
+            type="text"
+            value={destination}
+            onChange={(e) => setDestination(e.target.value)}
+            placeholder="e.g. Earth To Mouth Cafe"
+            maxLength={100}
+            disabled={busy}
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg"
+          />
+          <p className="text-xs text-gray-400 mt-1">
+            Which restaurant's share is this step for? Leave blank if it's for the whole batch.
+          </p>
         </div>
 
         <div>
@@ -338,6 +366,7 @@ function CheckpointPage({ onBack }) {
             onChange={(e) => setNotes(e.target.value)}
             placeholder="e.g. Received chilled, 350 kg"
             rows={2}
+            maxLength={280}
             disabled={busy}
             className="w-full px-4 py-3 border border-gray-300 rounded-lg"
           />
@@ -365,7 +394,7 @@ function CheckpointPage({ onBack }) {
 
         <button
           onClick={recordCheckpoint}
-          disabled={!account || !handler?.authorized || busy}
+          disabled={!account || !handler?.authorized || busy || config.paused}
           className="w-full bg-green-600 text-white py-3 rounded-lg font-bold text-lg hover:bg-green-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed"
         >
           {status === 'signing' ? '🦊 Confirm in MetaMask…'
