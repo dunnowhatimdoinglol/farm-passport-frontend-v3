@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import axios from 'axios';
-import { ethers } from 'ethers';
 import QRCode from 'qrcode';
 
-function CreateBatchForm({ privateKey, season, setSeason, onBatchCreated }) {
+// farmerToken = the farmer's sign-in token (the farm is worked out from it on the server)
+function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuccess, onCancel }) {
   const [batchId, setBatchId] = useState('');
   const [productType, setProductType] = useState('Vegetable');
   const [productName, setProductName] = useState('');
@@ -31,23 +31,17 @@ function CreateBatchForm({ privateKey, season, setSeason, onBatchCreated }) {
     setLoading(true);
 
     try {
-      // Derive farmer address from private key
-      const wallet = new ethers.Wallet(privateKey);
-      const farmerAddress = wallet.address;
-
       console.log('Creating batch (GASLESS)...');
-      console.log('Farmer address:', farmerAddress);
 
-      // GASLESS: Backend pays gas!
+      // GASLESS: Backend pays gas! The sign-in token says which farm this is.
       const response = await axios.post('https://farm-passport-backend-v3.onrender.com/api/farmer/create-batch', {
-        farmerAddress: farmerAddress,  // Include farmer address
         batchId,
         productType,
         productName,
         quantity: parseInt(quantity),
         unit,
         season: season === 'auto' ? null : season 
-      });
+      }, { headers: { Authorization: `Bearer ${farmerToken}` } });
 
       console.log('Batch created (gasless):', response.data);
 
@@ -94,9 +88,8 @@ function CreateBatchForm({ privateKey, season, setSeason, onBatchCreated }) {
     setShowSuccess(false);
     setCreatedBatch(null);
     setQrCodeUrl('');
-    if (onBatchCreated) {
-      onBatchCreated();
-    }
+    if (onBatchCreated) onBatchCreated();
+    if (onSuccess) onSuccess();
   };
 
   return (
@@ -230,6 +223,17 @@ function CreateBatchForm({ privateKey, season, setSeason, onBatchCreated }) {
         >
           {loading ? 'Creating Batch (Gasless)...' : 'Create Batch (No ETH Needed!)'}
         </button>
+
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={loading}
+            className="w-full text-gray-600 hover:underline text-sm"
+          >
+            Cancel
+          </button>
+        )}
       </form>
 
       {/* Success Modal */}

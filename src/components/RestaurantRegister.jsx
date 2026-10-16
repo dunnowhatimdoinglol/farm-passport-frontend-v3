@@ -7,6 +7,7 @@ function RestaurantRegister({ onRegister, onSwitchToLogin }) {
   const [confirmPwd,     setConfirmPwd]     = useState('');
   const [restaurantName, setRestaurantName] = useState('');
   const [postcode,       setPostcode]       = useState('');
+  const [businessRef,    setBusinessRef]    = useState('');
   const [loading,        setLoading]        = useState(false);
   const [error,          setError]          = useState('');
 
@@ -38,7 +39,8 @@ function RestaurantRegister({ onRegister, onSwitchToLogin }) {
         email,
         password,
         restaurantName: restaurantName.trim(),
-        postcode:       postcode.trim()
+        postcode:       postcode.trim(),
+        businessReference: businessRef.trim() || undefined
       });
 
       console.log('Restaurant registration successful:', response.data);
@@ -97,6 +99,21 @@ function RestaurantRegister({ onRegister, onSwitchToLogin }) {
           </div>
 
           <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Food business registration / Companies House number <span className="font-normal text-gray-400">(optional while testing)</span>
+            </label>
+            <input
+              type="text"
+              value={businessRef}
+              onChange={(e) => setBusinessRef(e.target.value)}
+              placeholder="e.g. council registration ref or 01234567"
+              maxLength={60}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+            />
+            <p className="text-xs text-gray-400 mt-1">We check this before approving your account</p>
+          </div>
+
+          <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Email Address</label>
             <input
               type="email"
@@ -137,6 +154,8 @@ function RestaurantRegister({ onRegister, onSwitchToLogin }) {
               <span className="font-semibold">🔒 Secure & Private</span>
               <br />
               Your password is encrypted and never shared. Your restaurant name appears on receipts you generate.
+              <br />
+              New accounts are checked and approved before they can order stock or create receipts.
             </p>
           </div>
 

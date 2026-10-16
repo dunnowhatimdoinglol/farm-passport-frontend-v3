@@ -2,14 +2,18 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import CreateBatchForm from './CreateBatchForm';
 import { QRCodeSVG } from 'qrcode.react';
-import { ethers } from 'ethers';
+import { FarmerOrders, DispatchForm, FarmerShipments } from './FarmerSupply';
+import { formatQty } from './walletHelpers';
 
-function FarmerDashboard({ privateKey, season, setSeason, onLogout }) {
+// farmerToken = sign-in token from FarmerPortal (the private key is never sent to the server)
+function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogout }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [farmerData, setFarmerData] = useState(null);
   const [showCreateBatch, setShowCreateBatch] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [dispatchBatchId, setDispatchBatchId] = useState(null);   // which batch's "Send" form is open
+  const authHeader = { headers: { Authorization: `Bearer ${farmerToken}` } };
 
   // Bio editing state
   const [editingBio, setEditingBio] = useState(false);
@@ -31,9 +35,7 @@ function FarmerDashboard({ privateKey, season, setSeason, onLogout }) {
       setLoading(true);
       setError(null);
 
-      const response = await axios.post('https://farm-passport-backend-v3.onrender.com/api/farmer/dashboard', {
-        privateKey: privateKey
-      });
+      const response = await axios.post('https://farm-passport-backend-v3.onrender.com/api/farmer/dashboard', {}, authHeader);
 
       setFarmerData(response.data);
 
@@ -71,7 +73,8 @@ function FarmerDashboard({ privateKey, season, setSeason, onLogout }) {
 
       await axios.put(
         `https://farm-passport-backend-v3.onrender.com/api/farmer/profile/${farmerData.farmer.address}`,
-        { bio: bioText.trim() }
+        { bio: bioText.trim() },
+        authHeader
       );
 
       setEditingBio(false);
@@ -88,9 +91,6 @@ function FarmerDashboard({ privateKey, season, setSeason, onLogout }) {
       setResendingEmail(true);
       setResendError('');
       setResendSuccess('');
-
-      const wallet = new ethers.Wallet(privateKey);
-      const farmerAddress = wallet.address;
 
       const res = await axios.post('https://farm-passport-backend-v3.onrender.com/api/farmer/resend-verification', {
         farmerAddress
@@ -168,6 +168,8 @@ function FarmerDashboard({ privateKey, season, setSeason, onLogout }) {
   }
 
   const { farmer, batches } = farmerData;
+  const approved = farmer.approvalStatus === 'approved';
+  const refreshAll = () => setRefreshTrigger(prev => prev + 1);
 
   return (
     <div className="max-w-6xl mx-auto">
@@ -206,6 +208,17 @@ function FarmerDashboard({ privateKey, season, setSeason, onLogout }) {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Waiting for approval */}
+      {!approved && (
+        <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-6 mb-6">
+          <h3 className="font-bold text-blue-800 mb-1">⏳ Your farm is waiting for approval</h3>
+          <p className="text-sm text-blue-700">
+            We check every new farm before it goes on the blockchain. Once approved you'll be able to create batches
+            and accept orders. {!farmer.emailVerified && 'Please verify your email in the meantime.'}
+          </p>
         </div>
       )}
 
@@ -339,18 +352,25 @@ function FarmerDashboard({ privateKey, season, setSeason, onLogout }) {
         </div>
       </div>
 
+      {/* Orders from restaurants */}
+      <FarmerOrders farmerToken={farmerToken} approved={approved} refreshKey={refreshTrigger} onChanged={refreshAll} />
+
+      {/* Shipments sent */}
+      <FarmerShipments farmerToken={farmerToken} refreshKey={refreshTrigger} onChanged={refreshAll} />
+
       {/* Create Batch Button / Form */}
       {!showCreateBatch ? (
         <button
           onClick={() => setShowCreateBatch(true)}
-          className="w-full bg-green-600 text-white py-4 rounded-lg font-bold text-lg hover:bg-green-700 transition mb-6"
+          disabled={!approved}
+          className="w-full bg-green-600 text-white py-4 rounded-lg font-bold text-lg hover:bg-green-700 transition mb-6 disabled:bg-gray-400 disabled:cursor-not-allowed"
         >
-          ➕ Create New Batch
+          {approved ? '➕ Create New Batch' : '🔒 Create batches once approved'}
         </button>
       ) : (
         <div className="mb-6">
           <CreateBatchForm
-            privateKey={privateKey}
+            farmerToken={farmerToken}
             season={season}
             setSeason={setSeason}
             onSuccess={handleBatchCreated}
@@ -466,14 +486,37 @@ function FarmerDashboard({ privateKey, season, setSeason, onLogout }) {
                   </div>
 
                   {/* Stats Row */}
-                  <div className="mt-3 pt-3 border-t flex gap-4 text-sm">
+                  <div className="mt-3 pt-3 border-t flex gap-4 text-sm flex-wrap items-center">
                     <div>
                       <span className="text-gray-500">Badges:</span>
                       <span className="font-semibold text-gray-800 ml-1">
                         {batch.unlocks || 0}
                       </span>
                     </div>
+                    <div>
+                      <span className="text-gray-500">Still at farm:</span>
+                      <span className="font-semibold text-gray-800 ml-1">
+                        {formatQty(batch.quantityRemaining ?? batch.quantity, unit)}
+                      </span>
+                    </div>
+                    {approved && Number(batch.quantityRemaining ?? batch.quantity) > 0 && dispatchBatchId !== batchId && (
+                      <button
+                        onClick={() => setDispatchBatchId(batchId)}
+                        className="ml-auto text-green-700 font-semibold hover:underline"
+                      >
+                        🚚 Send to a depot / business
+                      </button>
+                    )}
                   </div>
+
+                  {dispatchBatchId === batchId && (
+                    <DispatchForm
+                      farmerToken={farmerToken}
+                      batch={batch}
+                      onCancel={() => setDispatchBatchId(null)}
+                      onDone={() => { setDispatchBatchId(null); refreshAll(); }}
+                    />
+                  )}
 
                   {/* Download QR Button */}
                   <button

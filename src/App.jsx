@@ -15,7 +15,8 @@ import RestaurantFinder from './components/RestaurantFinder';
 import EmailVerificationBanner from './components/EmailVerificationBanner';
 import VerifyEmail from './components/VerifyEmail';
 import Leaderboard from './components/Leaderboard';
-import CheckpointPage from './components/CheckpointPage';
+import SupplyChainPage from './components/SupplyChainPage';
+import AdminPage from './components/AdminPage';
 import {
   AUTH_EVENT, announceAuth,
   clearCustomerSession, clearRestaurantSession, readRestaurantSession
@@ -92,9 +93,11 @@ function App() {
     
     if (token) {
       setCurrentView('verify-email');
-    } else if (window.location.pathname.startsWith('/checkpoint')) {
-      // Opened from an NFC sticker: /checkpoint?batch=...&stage=...
-      setCurrentView('checkpoint');
+    } else if (window.location.pathname.startsWith('/supply') || window.location.pathname.startsWith('/checkpoint')) {
+      // Opened from an NFC sticker: /supply?shipment=12  (old /checkpoint?batch=... links still work)
+      setCurrentView('supply');
+    } else if (window.location.pathname.startsWith('/admin')) {
+      setCurrentView('admin');
     }
   }, []);
 
@@ -230,6 +233,13 @@ function App() {
                 </button>
 
                 <button
+                  onClick={() => setCurrentView('supply')}
+                  className="bg-teal-600 text-white px-4 py-1.5 rounded-lg font-semibold hover:bg-teal-700 transition text-sm"
+                >
+                  🚚 Supply Chain
+                </button>
+
+                <button
                  onClick={() => setCurrentView('leaderboard')}
                  className="bg-purple-600 text-white px-4 py-1.5 rounded-lg font-semibold hover:bg-purple-700 transition text-sm"
                  >
@@ -266,6 +276,13 @@ function App() {
                   className="bg-orange-600 text-white px-4 py-1.5 rounded-lg font-semibold hover:bg-orange-700 transition text-sm"
                 >
                   🍽️ Restaurant
+                </button>
+
+                <button
+                  onClick={() => setCurrentView('supply')}
+                  className="bg-teal-600 text-white px-4 py-1.5 rounded-lg font-semibold hover:bg-teal-700 transition text-sm"
+                >
+                  🚚 Supply Chain
                 </button>
 
                 {restaurantName ? (
@@ -424,8 +441,12 @@ function App() {
           />
         )}
 
-        {currentView === 'checkpoint' && (
-          <CheckpointPage onBack={handleBackToScanner} />
+        {currentView === 'supply' && (
+          <SupplyChainPage onBack={handleBackToScanner} />
+        )}
+
+        {currentView === 'admin' && (
+          <AdminPage onBack={handleBackToScanner} />
         )}
 
         {currentView === 'leaderboard' && (

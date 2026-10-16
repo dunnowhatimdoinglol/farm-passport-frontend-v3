@@ -225,15 +225,11 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack, onLoginRequired 
         </div>
       </div>
 
-      {/* Journey — this restaurant's share is highlighted and opened */}
+      {/* Journey — just the path this customer's food took (with an option to see everything) */}
       {batchId && (
         <JourneyTimeline
           batchId={batchId}
-          registeredAt={receipt.batch?.createdAt || null}
-          creationTxHash={receipt.batch?.creationTxHash || null}
-          farmName={farmName}
-          farmLocation={receipt.farmer?.location || null}
-          highlightDestination={restaurantName}
+          shipmentId={receipt.shipmentId || null}
         />
       )}
 

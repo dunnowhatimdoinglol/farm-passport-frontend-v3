@@ -2,12 +2,15 @@ import { useState } from 'react';
 import FarmerDashboard from './FarmerDashboard';
 import axios from 'axios';
 import { ethers } from 'ethers';
+import { walletSignIn, hasWallet, connectMetaMask, metaMaskSign, walletError } from './walletHelpers';
 
 function FarmerPortal({ onBackToCustomer }) {
   const [view, setView] = useState('login');
   const [privateKey, setPrivateKey] = useState('');
   const [farmerAddress, setFarmerAddress] = useState('');
   const [registrationData, setRegistrationData] = useState(null);
+  const [farmerToken, setFarmerToken] = useState(null);   // sign-in token (the private key never leaves this browser)
+  const [cphNumber, setCphNumber] = useState('');
 
   // Registration form state
   const [regPrivateKey, setRegPrivateKey] = useState('');
@@ -46,11 +49,49 @@ function FarmerPortal({ onBackToCustomer }) {
     setError('');
   };
 
-  const handleLogin = () => {
-    if (privateKey.trim()) {
-      setView('dashboard');
-    } else {
+  // Sign in: the key signs a one-time message HERE in the browser; only the signature is sent
+  const signInWithKey = async (key) => {
+    const wallet = new ethers.Wallet(key.trim());
+    const result = await walletSignIn(wallet.address, (message) => wallet.signMessage(message), '/farmer/auth');
+    setFarmerToken(result.token);
+    setFarmerAddress(result.farmerAddress);
+    return result;
+  };
+
+  const handleLogin = async () => {
+    if (!privateKey.trim()) {
       setError('Please enter your private key');
+      return;
+    }
+    setError('');
+    setLoading(true);
+    try {
+      await signInWithKey(privateKey);
+      setPrivateKey('');            // don't keep the key around once signed in
+      setView('dashboard');
+    } catch (err) {
+      console.error('Farmer sign-in error:', err);
+      setError(err.code === 'INVALID_ARGUMENT' ? 'That private key is not valid' : walletError(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Sign in with MetaMask instead of typing a key
+  const handleMetaMaskLogin = async () => {
+    setError('');
+    setLoading(true);
+    try {
+      const address = await connectMetaMask();
+      const result = await walletSignIn(address, (message) => metaMaskSign(address, message), '/farmer/auth');
+      setFarmerToken(result.token);
+      setFarmerAddress(result.farmerAddress);
+      setView('dashboard');
+    } catch (err) {
+      console.error('MetaMask sign-in error:', err);
+      setError(walletError(err));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -71,7 +112,8 @@ function FarmerPortal({ onBackToCustomer }) {
         farmerName,   // Person's name
         farmName,     // Farm business name
         location,
-        description
+        description,
+        cphNumber: cphNumber.trim() || undefined
       });
 
       console.log('Registration response:', response.data);
@@ -80,12 +122,15 @@ function FarmerPortal({ onBackToCustomer }) {
         farmerName,
         farmName,
         farmerAddress: response.data.farmerAddress,
-        transactionHash: response.data.transactionHash,
         privateKey: regPrivateKey
       });
 
-      setPrivateKey(regPrivateKey);
-      setFarmerAddress(response.data.farmerAddress);
+      // Sign straight in so "Continue to Dashboard" works (they can still log in later if this fails)
+      try {
+        await signInWithKey(regPrivateKey);
+      } catch (signInErr) {
+        console.error('Auto sign-in after registration failed:', signInErr);
+      }
 
       setView('registration-success');
     } catch (err) {
@@ -97,12 +142,13 @@ function FarmerPortal({ onBackToCustomer }) {
   };
 
   const handleContinueToDashboard = () => {
-    setView('dashboard');
+    setView(farmerToken ? 'dashboard' : 'login');
   };
 
   const handleBackToHome = () => {
     setView('login');
     setPrivateKey('');
+    setFarmerToken(null);
     setRegPrivateKey('');
     setGeneratedAddress('');
     setEmail('');
@@ -117,13 +163,15 @@ function FarmerPortal({ onBackToCustomer }) {
   if (view === 'dashboard') {
     return (
       <FarmerDashboard 
-        privateKey={privateKey}
-          season={season}              // ← ADD THIS
-          setSeason={setSeason}
+        farmerToken={farmerToken}
+        farmerAddress={farmerAddress}
+        season={season}
+        setSeason={setSeason}
         onBack={onBackToCustomer}
         onLogout={() => {
           setView('login');
           setPrivateKey('');
+          setFarmerToken(null);
         }}
       />
     );
@@ -139,7 +187,7 @@ function FarmerPortal({ onBackToCustomer }) {
               Registration Successful!
             </h2>
             <p className="text-gray-600">
-              Your farm has been registered on the blockchain (gas-free!)
+              Your farm has been submitted for approval
             </p>
           </div>
 
@@ -161,11 +209,13 @@ function FarmerPortal({ onBackToCustomer }) {
 
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
             <p className="text-sm text-gray-700 mb-2">
-              <span className="font-semibold">✨ Gasless Registration!</span>
+              <span className="font-semibold">⏳ What happens next</span>
             </p>
-            <p className="text-xs text-gray-600">
-              You didn't need any ETH - our backend paid the gas fee for you!
-            </p>
+            <ol className="text-xs text-gray-600 list-decimal ml-4 space-y-1">
+              <li>Click the link in the email we've sent you.</li>
+              <li>We check your farm's details (e.g. your CPH number).</li>
+              <li>Once approved, your farm is registered on the blockchain (gas-free) and you can create batches.</li>
+            </ol>
           </div>
 
           <div className="bg-yellow-50 border-2 border-yellow-400 rounded-lg p-6 mb-6">
@@ -189,20 +239,6 @@ function FarmerPortal({ onBackToCustomer }) {
                 </p>
               </div>
             </div>
-          </div>
-
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-            <p className="text-sm text-gray-700">
-              <span className="font-semibold">Transaction Hash:</span>
-            </p>
-            <a
-              href={`https://sepolia.basescan.org/tx/${registrationData.transactionHash}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-blue-600 hover:underline text-xs font-mono break-all"
-            >
-              {registrationData.transactionHash} ↗
-            </a>
           </div>
 
           <div className="flex gap-3">
@@ -364,6 +400,21 @@ function FarmerPortal({ onBackToCustomer }) {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
+                CPH number <span className="font-normal text-gray-400">(optional while testing)</span>
+              </label>
+              <input
+                type="text"
+                value={cphNumber}
+                onChange={(e) => setCphNumber(e.target.value)}
+                placeholder="e.g., 12/345/6789"
+                maxLength={20}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              />
+              <p className="text-xs text-gray-500 mt-1">Your County Parish Holding number — we check it before approving your farm</p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
                 Description
               </label>
               <textarea
@@ -429,10 +480,24 @@ function FarmerPortal({ onBackToCustomer }) {
 
           <button
             onClick={handleLogin}
-            className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition font-semibold"
+            disabled={loading}
+            className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition font-semibold disabled:bg-gray-400"
           >
-            Login
+            {loading ? 'Signing in…' : 'Login'}
           </button>
+          <p className="text-xs text-gray-500 text-center">
+            🔒 Your key stays in this browser — it only signs a one-time message to prove it's you.
+          </p>
+
+          {hasWallet() && (
+            <button
+              onClick={handleMetaMaskLogin}
+              disabled={loading}
+              className="w-full bg-orange-500 text-white py-3 rounded-lg hover:bg-orange-600 transition font-semibold disabled:bg-gray-400"
+            >
+              🦊 Sign in with MetaMask
+            </button>
+          )}
 
           <div className="text-center">
             <button

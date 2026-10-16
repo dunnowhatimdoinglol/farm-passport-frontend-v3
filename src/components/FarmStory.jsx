@@ -162,13 +162,7 @@ function FarmStory({ batchId, onBack, onViewBadges, viewOnly = false }) {
       </div>
 
       {/* On-chain journey: batch registration + every checkpoint */}
-      <JourneyTimeline
-        batchId={batchData.batchId}
-        registeredAt={batchData.harvestDate}
-        creationTxHash={batchData.creationTxHash}
-        farmName={batchData.farmer?.name}
-        farmLocation={batchData.farmer?.location}
-      />
+      <JourneyTimeline batchId={batchData.batchId} />
 
       {/* Badge section - conditional based on viewOnly */}
       {viewOnly ? (
