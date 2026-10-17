@@ -68,6 +68,18 @@ function checkpointStep(c, shipment, unit) {
   }
   if (stage === 'sold') return { ...base, title: `Sold by ${c.recorderName || c.location || ''}`, subtitle: qty(c.quantity, unit) };
   if (stage === 'cancelled') return { ...base, title: 'Shipment cancelled', subtitle: `${qty(c.quantity, unit)} returned` };
+  // Quick steps from a depot / courier ("Arrived at Bristol Depot", "Out for delivery to …") read best as the title
+  const quick = /^(Arrived at|Out for delivery)/.test(c.notes || '');
+  if (quick) {
+    const [headline, ...rest] = c.notes.split(' — ');
+    return {
+      ...base,
+      icon: headline.startsWith('Out for delivery') ? '🚚' : '📦',
+      title: headline,
+      subtitle: c.recorderName && !headline.includes(c.recorderName) ? `by ${c.recorderName}` : null,
+      notes: rest.join(' — ') || null,
+    };
+  }
   return {
     ...base,
     title: c.stage,

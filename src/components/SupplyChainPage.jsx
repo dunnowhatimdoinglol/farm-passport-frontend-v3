@@ -267,15 +267,28 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
   const [txHash, setTxHash] = useState(null);
   const [error,  setError]  = useState(null);
   const [unsynced, setUnsynced] = useState(false);
+  const [preset, setPreset] = useState(null);     // 'arrived' | 'out' quick steps for carried shipments
 
   const mine = account && s.toAddress === account.toLowerCase();
+  const carried = account && s.carrierAddress === account.toLowerCase();
   const stages = who?.stages || [];
   const busy = ['signing', 'mining', 'saving'].includes(status);
 
-  const open = (m) => {
+  // Quick steps a depot / courier records on a shipment it's carrying (written at the start of the note)
+  const PRESETS = {
+    arrived: `Arrived at ${who?.name || 'depot'}`,
+    out:     `Out for delivery to ${s.toName}`,
+  };
+  // Where a carried shipment has got to, from its latest step
+  const latest = s.lastStep?.notes || '';
+  const carriedStatus = latest.startsWith('Out for delivery') ? '🚚 Out for delivery'
+    : latest.startsWith('Arrived at') ? `📦 At ${s.lastStep.recorderName || 'depot'}` : null;
+
+  const open = (m, presetKey = null) => {
     setMode(m); setError(null); setTxHash(null); setStatus('idle'); setNotes('');
+    setPreset(presetKey);
     setQty(m === 'receive' ? String(s.quantitySent) : '');
-    setStage(stages[0] || '');
+    setStage(presetKey === 'out' && stages.includes('Transport') ? 'Transport' : (stages[0] || ''));
     setWhere(who?.name || '');
   };
 
@@ -297,7 +310,8 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
             Date.now() - new Date(c.recordedAt).getTime() < 10 * 60 * 1000);
           if (recent && !window.confirm(`You already recorded "${stage}" on this shipment in the last 10 minutes. Record another?`)) return;
         } catch (_) {}
-        result = await sendAndConfirm(contract, 'addCheckpoint', [ethers.ZeroAddress, s.batchId, s.shipmentId, stage, where.trim(), notes.trim()], setStatus);
+        const fullNotes = (preset ? [PRESETS[preset], notes.trim()].filter(Boolean).join(' — ') : notes.trim()).slice(0, 280);
+        result = await sendAndConfirm(contract, 'addCheckpoint', [ethers.ZeroAddress, s.batchId, s.shipmentId, stage, where.trim(), fullNotes], setStatus);
       }
       setTxHash(result.hash);
       setUnsynced(!result.synced);
@@ -314,7 +328,12 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
   return (
     <div className={compact ? 'border border-gray-200 rounded-lg p-4' : 'bg-white rounded-lg shadow-lg p-6'}>
       {title && <h3 className="text-lg font-bold text-gray-800 mb-2">{title}</h3>}
-      <p className="font-bold text-gray-800">#{s.shipmentId} · {formatQty(s.quantitySent, s.unit)} {s.productName}</p>
+      <div className="flex justify-between gap-2 flex-wrap">
+        <p className="font-bold text-gray-800">#{s.shipmentId} · {formatQty(s.quantitySent, s.unit)} {s.productName}</p>
+        {s.status === 'in_transit' && carriedStatus && (
+          <span className="text-xs font-semibold bg-teal-100 text-teal-800 px-2 py-0.5 rounded-full h-fit">{carriedStatus}</span>
+        )}
+      </div>
       <p className="text-sm text-gray-600">{s.fromName} → {s.toName}{s.carrierName ? ` (via ${s.carrierName})` : ''} · {STATUS_TEXT[s.status] || s.status}</p>
       {s.status === 'delivered' && (
         <p className="text-sm text-gray-600">
@@ -334,8 +353,14 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
           {mine && s.status === 'delivered' && s.available > 0 && (
             <button onClick={() => open('forward')} className="bg-blue-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-blue-700">🚚 Send some on</button>
           )}
+          {carried && s.status === 'in_transit' && stages.length > 0 && (
+            <>
+              <button onClick={() => open('step', 'arrived')} className="bg-teal-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-teal-700">📦 Arrived with us</button>
+              <button onClick={() => open('step', 'out')} className="bg-blue-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-blue-700">🚚 Out for delivery</button>
+            </>
+          )}
           {stages.length > 0 && s.status !== 'cancelled' && (
-            <button onClick={() => open('step')} className="bg-gray-700 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-gray-800">📍 Record a step</button>
+            <button onClick={() => open('step')} className="bg-gray-700 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-gray-800">📍 {carried ? 'Other step' : 'Record a step'}</button>
           )}
         </div>
       )}
@@ -360,6 +385,9 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
               ))}
             </select>
           )}
+          {mode === 'step' && preset && (
+            <p className="text-sm font-semibold text-gray-800">{PRESETS[preset]}</p>
+          )}
           {mode === 'step' && (
             <>
               {stages.length > 1 ? (
@@ -375,7 +403,7 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
             </>
           )}
           <input type="text" value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={280} disabled={busy}
-            placeholder="Notes (optional)" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+            placeholder={preset ? 'Extra note (optional), e.g. van reg, ETA 10am' : 'Notes (optional)'} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
           {error && <p className="text-sm text-red-600 font-semibold">⚠️ {error}</p>}
           <div className="flex gap-2">
             <button onClick={run} disabled={busy || (mode === 'forward' && (!to || !qty)) || (mode === 'receive' && qty === '')}
@@ -390,6 +418,7 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
       {status === 'done' && txHash && (
         <div className="mt-3 bg-green-50 border border-green-300 rounded-lg p-3">
           <p className="text-green-700 font-semibold">✅ Recorded on-chain!</p>
+          {preset === 'out' && <p className="text-xs text-gray-600 mt-1">{s.toName} confirms how much arrived — then this moves to your History.</p>}
           {unsynced && (
             <p className="text-xs text-orange-700 mt-1">
               The app hasn't caught up yet, so this list may look out of date. Refresh in a minute, or re-sync this transaction on the Admin page.
