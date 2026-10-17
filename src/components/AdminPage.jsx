@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import {
   API_BASE, hasWallet, shortAddr, connectMetaMask, metaMaskSign, walletSignIn,
-  supplyChainWithSigner, sendAndConfirm, walletError,
+  supplyChainWithSigner, sendAndConfirm, walletError, syncTransaction,
 } from './walletHelpers';
 
 /**
@@ -24,6 +24,7 @@ function AdminPage({ onBack }) {
   const [hAddress, setHAddress] = useState('');
   const [hName,    setHName]    = useState('');
   const [hStages,  setHStages]  = useState('Warehouse');
+  const [syncHash, setSyncHash] = useState('');
 
   const auth = { headers: { Authorization: `Bearer ${token}` } };
 
@@ -71,8 +72,8 @@ function AdminPage({ onBack }) {
     setBusy(id); setError(null); setMessage(null);
     try {
       const contract = await supplyChainWithSigner(config.contractAddress);
-      await sendAndConfirm(contract, method, args);
-      setMessage(okMessage);
+      const result = await sendAndConfirm(contract, method, args);
+      setMessage(result.synced ? okMessage : `${okMessage} (on-chain; the app copy will catch up — use Re-sync below if not)`);
       await load();
       return true;
     } catch (err) {
@@ -235,6 +236,30 @@ function AdminPage({ onBack }) {
             {busy === 'handler' ? '⛓️ Recording…' : 'Save handler'}
           </button>
         </form>
+      </div>
+
+      {/* Re-sync: copy a transaction's results from the chain into the app (if a page didn't update) */}
+      <div className="bg-white rounded-lg shadow-lg p-6">
+        <h3 className="text-lg font-bold text-gray-800 mb-1">🔄 Re-sync a transaction</h3>
+        <p className="text-xs text-gray-500 mb-3">
+          If something was recorded on-chain but a page didn't update, paste its transaction hash (from MetaMask → Activity → View on block explorer).
+        </p>
+        <div className="flex gap-2 flex-wrap">
+          <input value={syncHash} onChange={(e) => setSyncHash(e.target.value.trim())} placeholder="0x…"
+            className="flex-1 min-w-0 px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono" />
+          <button
+            disabled={busy !== null || !/^0x[0-9a-fA-F]{64}$/.test(syncHash)}
+            onClick={async () => {
+              setBusy('sync'); setError(null); setMessage(null);
+              const ok = await syncTransaction(syncHash);
+              if (ok) { setMessage('Transaction re-synced'); setSyncHash(''); await load(); }
+              else setError('Could not re-sync that transaction — check the hash is a supply-chain transaction.');
+              setBusy(null);
+            }}
+            className="bg-gray-700 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-gray-800 disabled:bg-gray-300">
+            {busy === 'sync' ? 'Syncing…' : 'Re-sync'}
+          </button>
+        </div>
       </div>
 
       <div className="text-center">

@@ -34,6 +34,14 @@ export const toScaled = (q) => BigInt(Math.round(Number(q) * QTY_SCALE));
 export const formatQty = (amount, unit) =>
   `${Number(amount || 0).toLocaleString('en-GB', { maximumFractionDigits: 3 })} ${unit || ''}`.trim();
 
+/** One line describing a shipment's latest step, e.g. "Warehouse · Bristol Depot: "due out tomorrow" · 17 Oct, 09:10" */
+export function lastStepText(step) {
+  if (!step) return null;
+  const when = new Date(step.recordedAt).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const who = step.recorderName || step.location;
+  return `${step.stage}${who ? ` · ${who}` : ''}${step.notes ? `: "${step.notes}"` : ''} · ${when}`;
+}
+
 /** Make sure MetaMask is on Base Sepolia (adds the network if it's missing). */
 export async function ensureBaseSepolia() {
   const current = await window.ethereum.request({ method: 'eth_chainId' });
@@ -96,6 +104,7 @@ export function walletError(err) {
 /**
  * Send a contract call from MetaMask: dry run first (clear error messages),
  * then send, wait, and ask the backend to copy the result from the chain.
+ * Returns the transaction hash; `synced` says whether the app's copy was updated.
  */
 export async function sendAndConfirm(contract, method, args, onStatus = () => {}) {
   await contract[method].staticCall(...args);
@@ -104,11 +113,21 @@ export async function sendAndConfirm(contract, method, args, onStatus = () => {}
   onStatus('mining');
   await tx.wait();
   onStatus('saving');
-  try {
-    await axios.post(`${API_BASE}/supply/confirm-tx`, { txHash: tx.hash });
-  } catch (err) {
-    console.error('confirm-tx:', err);   // it's on-chain either way
-  }
+  const synced = await syncTransaction(tx.hash);
   onStatus('done');
-  return tx.hash;
+  return { hash: tx.hash, synced };
+}
+
+/** Ask the backend to copy a transaction's results from the chain (retries a couple of times). */
+export async function syncTransaction(txHash) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await axios.post(`${API_BASE}/supply/confirm-tx`, { txHash });
+      return true;
+    } catch (err) {
+      console.error(`confirm-tx attempt ${attempt}:`, err.response?.data?.error || err.message);
+      if (attempt < 3) await new Promise(r => setTimeout(r, 3000));
+    }
+  }
+  return false;   // it's on-chain either way; can be re-synced from the Admin page
 }

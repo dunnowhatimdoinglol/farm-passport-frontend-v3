@@ -4,6 +4,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import RestaurantLogin    from './RestaurantLogin';
 import RestaurantRegister from './RestaurantRegister';
 import { AUTH_EVENT, announceAuth, clearCustomerSession } from '../authSession';
+import { lastStepText } from './walletHelpers';
 
 const API_BASE = 'https://farm-passport-backend-v3.onrender.com/api';
 
@@ -756,6 +757,9 @@ function Deliveries({ authHeader, approved, onReceived }) {
                 <p className="font-bold text-gray-800">{formatQty(s.quantitySent, s.unit)} {s.productName}</p>
                 <p className="text-sm text-gray-600">from {s.fromName}{s.carrierName ? ` via ${s.carrierName}` : ''} · delivery #{s.shipmentId}</p>
                 {s.dispatchNotes && <p className="text-sm text-gray-600 italic">{s.fromName}: "{s.dispatchNotes}"</p>}
+                {s.lastStep && s.lastStep.stage !== 'Dispatched' && (
+                  <p className="text-xs text-teal-700 mt-1">📍 Latest: {lastStepText(s.lastStep)}</p>
+                )}
                 <div className="flex gap-2 mt-3 flex-wrap items-center">
                   <span className="text-sm text-gray-600">Received:</span>
                   <input type="number" step="any" min="0" max={s.quantitySent}

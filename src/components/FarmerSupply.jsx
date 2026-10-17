@@ -1,7 +1,7 @@
 // Farmer dashboard sections for the supply chain: orders, dispatching, shipments
 import { useState, useEffect } from 'react';
 import axios from 'axios';
-import { API_BASE, EXPLORER, formatQty } from './walletHelpers';
+import { API_BASE, EXPLORER, formatQty, lastStepText } from './walletHelpers';
 
 const STATUS_BADGE = {
   requested:  'bg-yellow-100 text-yellow-800',
@@ -283,6 +283,9 @@ export function FarmerShipments({ farmerToken, refreshKey = 0, onChanged }) {
                 #{s.shipmentId} · {formatQty(s.quantitySent, s.unit)} {s.productName} → {s.toName}
               </p>
               {s.carrierName && <p className="text-xs text-gray-500">via {s.carrierName}</p>}
+              {s.status === 'in_transit' && s.lastStep && s.lastStep.stage !== 'Dispatched' && (
+                <p className="text-xs text-teal-700 mt-1">📍 {lastStepText(s.lastStep)}</p>
+              )}
               <p className="font-mono text-xs text-gray-500">{s.batchId}</p>
               {s.status === 'delivered' && (
                 <p className={`text-xs mt-1 ${s.shortfall > 0 ? 'text-orange-600 font-semibold' : 'text-gray-500'}`}>

@@ -3,7 +3,7 @@ import axios from 'axios';
 import { ethers } from 'ethers';
 import JourneyTimeline from './JourneyTimeline';
 import {
-  API_BASE, EXPLORER, hasWallet, shortAddr, toScaled, formatQty,
+  API_BASE, EXPLORER, hasWallet, shortAddr, toScaled, formatQty, lastStepText,
   connectMetaMask, supplyChainWithSigner, sendAndConfirm, walletError,
 } from './walletHelpers';
 
@@ -243,6 +243,7 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
   const [status, setStatus] = useState('idle');
   const [txHash, setTxHash] = useState(null);
   const [error,  setError]  = useState(null);
+  const [unsynced, setUnsynced] = useState(false);
 
   const mine = account && s.toAddress === account.toLowerCase();
   const stages = who?.stages || [];
@@ -259,11 +260,11 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
     setError(null);
     try {
       const contract = await supplyChainWithSigner(config.contractAddress);
-      let hash;
+      let result;
       if (mode === 'receive') {
-        hash = await sendAndConfirm(contract, 'confirmReceipt', [ethers.ZeroAddress, s.shipmentId, toScaled(qty), notes.trim()], setStatus);
+        result = await sendAndConfirm(contract, 'confirmReceipt', [ethers.ZeroAddress, s.shipmentId, toScaled(qty), notes.trim()], setStatus);
       } else if (mode === 'forward') {
-        hash = await sendAndConfirm(contract, 'forward', [ethers.ZeroAddress, s.shipmentId, to, toScaled(qty), notes.trim()], setStatus);
+        result = await sendAndConfirm(contract, 'forward', [ethers.ZeroAddress, s.shipmentId, to, toScaled(qty), notes.trim()], setStatus);
       } else {
         // Catch accidental double taps: same wallet + stage on this shipment in the last 10 minutes
         try {
@@ -273,9 +274,10 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
             Date.now() - new Date(c.recordedAt).getTime() < 10 * 60 * 1000);
           if (recent && !window.confirm(`You already recorded "${stage}" on this shipment in the last 10 minutes. Record another?`)) return;
         } catch (_) {}
-        hash = await sendAndConfirm(contract, 'addCheckpoint', [ethers.ZeroAddress, s.batchId, s.shipmentId, stage, where.trim(), notes.trim()], setStatus);
+        result = await sendAndConfirm(contract, 'addCheckpoint', [ethers.ZeroAddress, s.batchId, s.shipmentId, stage, where.trim(), notes.trim()], setStatus);
       }
-      setTxHash(hash);
+      setTxHash(result.hash);
+      setUnsynced(!result.synced);
       onDone?.();
     } catch (err) {
       console.error('Supply chain action:', err);
@@ -297,6 +299,9 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
         </p>
       )}
       <p className="font-mono text-xs text-gray-400">{s.batchId}</p>
+      {s.lastStep && (
+        <p className="text-xs text-teal-700 bg-teal-50 rounded px-2 py-1 mt-2">📍 Latest: {lastStepText(s.lastStep)}</p>
+      )}
 
       {canAct && !busy && status !== 'done' && (
         <div className="flex gap-2 mt-3 flex-wrap">
@@ -362,6 +367,11 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
       {status === 'done' && txHash && (
         <div className="mt-3 bg-green-50 border border-green-300 rounded-lg p-3">
           <p className="text-green-700 font-semibold">✅ Recorded on-chain!</p>
+          {unsynced && (
+            <p className="text-xs text-orange-700 mt-1">
+              The app hasn't caught up yet, so this list may look out of date. Refresh in a minute, or re-sync this transaction on the Admin page.
+            </p>
+          )}
           <a href={`${EXPLORER}/tx/${txHash}`} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline">View on Basescan ↗</a>
         </div>
       )}
@@ -385,8 +395,8 @@ function FarmSteps({ batches, preselect, canAct, config, onDone }) {
     setError(null);
     try {
       const contract = await supplyChainWithSigner(config.contractAddress);
-      const hash = await sendAndConfirm(contract, 'addCheckpoint', [ethers.ZeroAddress, batchId, 0, 'Farm', where.trim(), notes.trim()], setStatus);
-      setTxHash(hash);
+      const result = await sendAndConfirm(contract, 'addCheckpoint', [ethers.ZeroAddress, batchId, 0, 'Farm', where.trim(), notes.trim()], setStatus);
+      setTxHash(result.hash);
       setNotes('');
       onDone?.();
     } catch (err) {
