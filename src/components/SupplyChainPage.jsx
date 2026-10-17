@@ -26,6 +26,7 @@ function SupplyChainPage({ onBack }) {
   const [walletErr, setWalletErr] = useState(null);
   const [inbound, setInbound] = useState([]);
   const [carrying, setCarrying] = useState([]);   // shipments this depot/courier is handling for others
+  const [outbound, setOutbound] = useState([]);   // shipments this wallet sent on
   const [farmBatches, setFarmBatches] = useState([]);
   const [focusShipment, setFocusShipment] = useState(null);
   const [participants, setParticipants] = useState([]);
@@ -49,18 +50,21 @@ function SupplyChainPage({ onBack }) {
     setWho(null);
     setInbound([]);
     setCarrying([]);
+    setOutbound([]);
     setFarmBatches([]);
     if (!address) return;
     try {
-      const [p, inb, fb, car] = await Promise.all([
+      const [p, inb, fb, car, out] = await Promise.all([
         axios.get(`${API_BASE}/participant/${address}`),
         axios.get(`${API_BASE}/supply/inbound/${address}`),
         axios.get(`${API_BASE}/supply/batches/${address}`),
         axios.get(`${API_BASE}/supply/carrying/${address}`),
+        axios.get(`${API_BASE}/supply/outbound/${address}`),
       ]);
       setWho(p.data);
       setInbound(inb.data.shipments || []);
       setCarrying(car.data.shipments || []);
+      setOutbound(out.data.shipments || []);
       setFarmBatches(fb.data.batches || []);
     } catch (err) {
       setWho({ authorized: false, error: walletError(err) });
@@ -157,50 +161,69 @@ function SupplyChainPage({ onBack }) {
         )
       )}
 
-      {/* Shipments this depot / courier is handling on the way to someone else */}
-      {account && who?.authorized && who.role === 'handler' && (
-        <div className="bg-white rounded-lg shadow-lg p-6">
-          <h3 className="text-lg font-bold text-gray-800 mb-1">2. Handling for others ({carrying.filter(s => s.status === 'in_transit').length})</h3>
-          <p className="text-sm text-gray-500 mb-3">Shipments a farm has sent via you. Record each step as you collect, store and hand them over.</p>
-          {carrying.filter(s => s.status === 'in_transit').length === 0 ? <p className="text-sm text-gray-500">Nothing to handle right now.</p> : (
-            <div className="space-y-3">
-              {carrying.filter(s => s.status === 'in_transit').map(s => (
-                <ShipmentPanel key={s.shipmentId} shipment={s} account={account} who={who} canAct={canAct}
-                  config={config} participants={participants} onDone={refresh} compact />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Work waiting for this wallet */}
-      {account && who?.authorized && who.role !== 'farmer' && (
-        <>
+      {/* Work for this wallet: arriving → in stock → carrying for others → history */}
+      {account && who?.authorized && who.role !== 'farmer' && (() => {
+        const carryingNow = carrying.filter(s => s.status === 'in_transit');
+        const history = [
+          ...outbound.map(s => ({ ...s, kind: 'sent' })),
+          ...carrying.filter(s => s.status !== 'in_transit').map(s => ({ ...s, kind: 'carried' })),
+        ].sort((a, b) => b.shipmentId - a.shipmentId);
+        const section = ({ n, title, hint, items, empty }) => (   // plain function so open forms aren't reset
           <div className="bg-white rounded-lg shadow-lg p-6">
-            <h3 className="text-lg font-bold text-gray-800 mb-3">3. On its way to you ({incoming.length})</h3>
-            {incoming.length === 0 ? <p className="text-sm text-gray-500">Nothing on its way right now.</p> : (
+            <h3 className="text-lg font-bold text-gray-800 mb-1">{n}. {title} ({items.length})</h3>
+            {hint && <p className="text-sm text-gray-500 mb-3">{hint}</p>}
+            {items.length === 0 ? <p className="text-sm text-gray-500">{empty}</p> : (
               <div className="space-y-3">
-                {incoming.map(s => (
+                {items.map(s => (
                   <ShipmentPanel key={s.shipmentId} shipment={s} account={account} who={who} canAct={canAct}
                     config={config} participants={participants} onDone={refresh} compact />
                 ))}
               </div>
             )}
           </div>
-
-          <div className="bg-white rounded-lg shadow-lg p-6">
-            <h3 className="text-lg font-bold text-gray-800 mb-3">4. With you now ({holding.length})</h3>
-            {holding.length === 0 ? <p className="text-sm text-gray-500">Nothing held right now.</p> : (
-              <div className="space-y-3">
-                {holding.map(s => (
-                  <ShipmentPanel key={s.shipmentId} shipment={s} account={account} who={who} canAct={canAct}
-                    config={config} participants={participants} onDone={refresh} compact />
-                ))}
-              </div>
+        );
+        return (
+          <>
+            {section({ n: 2, title: "Arriving", items: incoming, hint: "Stock sent to you. Confirm how much arrived when it gets here.", empty: "Nothing on its way to you." })}
+            {section({ n: 3, title: "In stock", items: holding, hint: "Stock you've received. Send some on to a business when it leaves.", empty: "Nothing in stock." })}
+            {who.role === 'handler' && (
+              section({ n: 4, title: "Carrying for others", items: carryingNow, hint: "Shipments going to someone else via you. Record each step as you collect, store and hand them over — the receiver confirms delivery.", empty: "Nothing to carry right now." })
             )}
-          </div>
-        </>
-      )}
+            <details className="bg-white rounded-lg shadow-lg p-6">
+              <summary className="text-lg font-bold text-gray-800 cursor-pointer">
+                {who.role === 'handler' ? 5 : 4}. History ({history.length})
+              </summary>
+              <p className="text-sm text-gray-500 mt-1 mb-3">What you've sent on and what you've carried, with how it ended up.</p>
+              {history.length === 0 ? <p className="text-sm text-gray-500">Nothing yet.</p> : (
+                <div className="divide-y divide-gray-100">
+                  {history.map(s => (
+                    <div key={`${s.kind}-${s.shipmentId}`} className="py-3 flex justify-between gap-3 flex-wrap">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-gray-800">
+                          #{s.shipmentId} · {formatQty(s.quantitySent, s.unit)} {s.productName} → {s.toName}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {s.kind === 'sent' ? 'Sent by you' : `Carried for ${s.fromName}`} · {new Date(s.createdAt).toLocaleDateString('en-GB')}
+                        </p>
+                        {s.status === 'delivered' && (
+                          <p className={`text-xs ${s.shortfall > 0 ? 'text-orange-600 font-semibold' : 'text-gray-500'}`}>
+                            Received {formatQty(s.quantityReceived, s.unit)}{s.shortfall > 0 ? ` · ⚠️ ${formatQty(s.shortfall, s.unit)} short` : ''}
+                            {s.deliveryNotes ? ` · "${s.deliveryNotes}"` : ''}
+                          </p>
+                        )}
+                      </div>
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full h-fit ${
+                        s.status === 'delivered' ? 'bg-green-100 text-green-700' : s.status === 'in_transit' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                        {s.status === 'delivered' ? 'Delivered' : s.status === 'in_transit' ? 'On its way' : 'Cancelled'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </details>
+          </>
+        );
+      })()}
 
       {/* Farms: record a "Farm" step on their own batches */}
       {account && who?.role === 'farmer' && (
