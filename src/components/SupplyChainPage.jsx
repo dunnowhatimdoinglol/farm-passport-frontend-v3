@@ -279,10 +279,12 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
     arrived: `Arrived at ${who?.name || 'depot'}`,
     out:     `Out for delivery to ${s.toName}`,
   };
-  // Where a carried shipment has got to, from its latest step
-  const latest = s.lastStep?.notes || '';
-  const carriedStatus = latest.startsWith('Out for delivery') ? '🚚 Out for delivery'
-    : latest.startsWith('Arrived at') ? `📦 At ${s.lastStep.recorderName || 'depot'}` : null;
+  // Where a carried shipment has got to: steps go in order, once each —
+  // Arrived with us → Out for delivery → (receiver confirms)
+  const progress = s.carrierSteps || { arrived: false, out: false };
+  const carriedStatus = progress.out ? '🚚 Out for delivery'
+    : progress.arrived ? `📦 At ${who?.name || 'depot'}` : null;
+  const nextQuick = !progress.arrived ? 'arrived' : !progress.out ? 'out' : null;
 
   const open = (m, presetKey = null) => {
     setMode(m); setError(null); setTxHash(null); setStatus('idle'); setNotes('');
@@ -353,11 +355,14 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
           {mine && s.status === 'delivered' && s.available > 0 && (
             <button onClick={() => open('forward')} className="bg-blue-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-blue-700">🚚 Send some on</button>
           )}
-          {carried && s.status === 'in_transit' && stages.length > 0 && (
-            <>
-              <button onClick={() => open('step', 'arrived')} className="bg-teal-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-teal-700">📦 Arrived with us</button>
-              <button onClick={() => open('step', 'out')} className="bg-blue-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-blue-700">🚚 Out for delivery</button>
-            </>
+          {carried && s.status === 'in_transit' && stages.length > 0 && nextQuick === 'arrived' && (
+            <button onClick={() => open('step', 'arrived')} className="bg-teal-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-teal-700">📦 Arrived with us</button>
+          )}
+          {carried && s.status === 'in_transit' && stages.length > 0 && nextQuick === 'out' && (
+            <button onClick={() => open('step', 'out')} className="bg-blue-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-blue-700">🚚 Out for delivery</button>
+          )}
+          {carried && s.status === 'in_transit' && !nextQuick && (
+            <p className="text-sm text-gray-600 self-center">⏳ Waiting for {s.toName} to confirm delivery</p>
           )}
           {stages.length > 0 && s.status !== 'cancelled' && (
             <button onClick={() => open('step')} className="bg-gray-700 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-gray-800">📍 {carried ? 'Other step' : 'Record a step'}</button>
