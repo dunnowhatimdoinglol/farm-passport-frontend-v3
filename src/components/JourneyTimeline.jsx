@@ -51,7 +51,11 @@ function checkpointStep(c, shipment, unit) {
   const stage = (c.stage || '').toLowerCase();
   const base = { key: `cp-${c.index}`, icon: iconFor(c.stage), notes: c.notes, date: c.recordedAt, txHash: c.txHash };
   if (stage === 'dispatched') {
-    return { ...base, title: `Sent ${qty(c.quantity, unit)} to ${shipment?.toName || 'the next stop'}`, subtitle: `from ${c.recorderName || shipment?.fromName || ''}` };
+    return {
+      ...base,
+      title: `Sent ${qty(c.quantity, unit)} to ${shipment?.toName || 'the next stop'}`,
+      subtitle: `from ${c.recorderName || shipment?.fromName || ''}${shipment?.carrierName ? ` · via ${shipment.carrierName}` : ''}`,
+    };
   }
   if (stage === 'delivered') {
     const short = shipment?.shortfall > 0;
@@ -77,7 +81,11 @@ function shipmentSteps(shipment, checkpoints, unit, { includeSales = false } = {
     .filter(c => c.shipmentId === shipment.shipmentId && (includeSales || c.stage !== 'Sold'))
     .map(c => checkpointStep(c, shipment, unit));
   if (shipment.status === 'in_transit') {
-    steps.push({ key: `wait-${shipment.shipmentId}`, icon: '⏳', title: `On its way to ${shipment.toName}`, pending: true });
+    steps.push({
+      key: `wait-${shipment.shipmentId}`, icon: '⏳', pending: true,
+      title: `On its way to ${shipment.toName}`,
+      subtitle: shipment.carrierName ? `with ${shipment.carrierName}` : null,
+    });
   }
   return steps;
 }

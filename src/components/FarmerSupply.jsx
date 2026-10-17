@@ -33,7 +33,15 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
   const [busyId,  setBusyId]  = useState(null);
   const [error,   setError]   = useState(null);
   const [qty,     setQty]     = useState({});     // orderId → quantity to send
+  const [via,     setVia]     = useState({});     // orderId → depot / courier address ('' = direct)
+  const [carriers, setCarriers] = useState([]);   // registered depots / couriers
   const auth = { headers: { Authorization: `Bearer ${farmerToken}` } };
+
+  useEffect(() => {
+    axios.get(`${API_BASE}/participants`)
+      .then(res => setCarriers((res.data.participants || []).filter(p => p.role === 'handler')))
+      .catch(() => {});
+  }, []);
 
   const load = async () => {
     try {
@@ -99,8 +107,17 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                   disabled={busyId === o.id}
                 />
                 <span className="text-sm text-gray-500">{o.unit}</span>
+                <select
+                  value={via[o.id] || ''}
+                  onChange={(e) => setVia({ ...via, [o.id]: e.target.value })}
+                  disabled={busyId === o.id}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+                >
+                  <option value="">Direct (own delivery)</option>
+                  {carriers.map(c => <option key={c.address} value={c.address}>via {c.name}</option>)}
+                </select>
                 <button
-                  onClick={() => act(o, 'dispatch', { quantity: qty[o.id] ?? o.quantity })}
+                  onClick={() => act(o, 'dispatch', { quantity: qty[o.id] ?? o.quantity, via: via[o.id] || undefined })}
                   disabled={busyId === o.id || !approved}
                   className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400"
                 >
@@ -157,6 +174,7 @@ export function DispatchForm({ farmerToken, batch, onDone, onCancel }) {
   const [to,       setTo]       = useState('');
   const [quantity, setQuantity] = useState('');
   const [notes,    setNotes]    = useState('');
+  const [via,      setVia]      = useState('');
   const [busy,     setBusy]     = useState(false);
   const [error,    setError]    = useState(null);
 
@@ -174,7 +192,7 @@ export function DispatchForm({ farmerToken, batch, onDone, onCancel }) {
     setError(null);
     try {
       await axios.post(`${API_BASE}/farmer/dispatch`,
-        { batchId: batch.batchId, to, quantity, notes },
+        { batchId: batch.batchId, to, quantity, notes, via: via || undefined },
         { headers: { Authorization: `Bearer ${farmerToken}` } });
       onDone?.();
     } catch (err) {
@@ -192,6 +210,13 @@ export function DispatchForm({ farmerToken, batch, onDone, onCancel }) {
         <option value="">— Send to —</option>
         {participants.map(p => (
           <option key={p.address} value={p.address}>{p.name} ({p.role === 'restaurant' ? 'restaurant' : 'depot / handler'})</option>
+        ))}
+      </select>
+      <select value={via} onChange={(e) => setVia(e.target.value)}
+        className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm">
+        <option value="">Direct (own delivery)</option>
+        {participants.filter(p => p.role === 'handler' && p.address !== to).map(p => (
+          <option key={p.address} value={p.address}>via {p.name}</option>
         ))}
       </select>
       <div className="flex gap-2 items-center">
@@ -257,11 +282,15 @@ export function FarmerShipments({ farmerToken, refreshKey = 0, onChanged }) {
               <p className="font-semibold text-gray-800">
                 #{s.shipmentId} · {formatQty(s.quantitySent, s.unit)} {s.productName} → {s.toName}
               </p>
+              {s.carrierName && <p className="text-xs text-gray-500">via {s.carrierName}</p>}
               <p className="font-mono text-xs text-gray-500">{s.batchId}</p>
               {s.status === 'delivered' && (
                 <p className={`text-xs mt-1 ${s.shortfall > 0 ? 'text-orange-600 font-semibold' : 'text-gray-500'}`}>
                   Received {formatQty(s.quantityReceived, s.unit)}{s.shortfall > 0 ? ` · ⚠️ ${formatQty(s.shortfall, s.unit)} short` : ''}
                 </p>
+              )}
+              {s.deliveryNotes && (
+                <p className="text-xs text-gray-600 italic mt-1">{s.toName}: "{s.deliveryNotes}"</p>
               )}
             </div>
             <div className="text-right space-y-1">

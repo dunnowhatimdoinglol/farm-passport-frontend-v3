@@ -25,6 +25,7 @@ function SupplyChainPage({ onBack }) {
   const [who,     setWho]     = useState(null);     // participant info for the wallet
   const [walletErr, setWalletErr] = useState(null);
   const [inbound, setInbound] = useState([]);
+  const [carrying, setCarrying] = useState([]);   // shipments this depot/courier is handling for others
   const [farmBatches, setFarmBatches] = useState([]);
   const [focusShipment, setFocusShipment] = useState(null);
   const [participants, setParticipants] = useState([]);
@@ -47,16 +48,19 @@ function SupplyChainPage({ onBack }) {
   const loadWallet = useCallback(async (address) => {
     setWho(null);
     setInbound([]);
+    setCarrying([]);
     setFarmBatches([]);
     if (!address) return;
     try {
-      const [p, inb, fb] = await Promise.all([
+      const [p, inb, fb, car] = await Promise.all([
         axios.get(`${API_BASE}/participant/${address}`),
         axios.get(`${API_BASE}/supply/inbound/${address}`),
         axios.get(`${API_BASE}/supply/batches/${address}`),
+        axios.get(`${API_BASE}/supply/carrying/${address}`),
       ]);
       setWho(p.data);
       setInbound(inb.data.shipments || []);
+      setCarrying(car.data.shipments || []);
       setFarmBatches(fb.data.batches || []);
     } catch (err) {
       setWho({ authorized: false, error: walletError(err) });
@@ -153,11 +157,27 @@ function SupplyChainPage({ onBack }) {
         )
       )}
 
+      {/* Shipments this depot / courier is handling on the way to someone else */}
+      {account && who?.authorized && who.role === 'handler' && (
+        <div className="bg-white rounded-lg shadow-lg p-6">
+          <h3 className="text-lg font-bold text-gray-800 mb-1">2. Handling for others ({carrying.filter(s => s.status === 'in_transit').length})</h3>
+          <p className="text-sm text-gray-500 mb-3">Shipments a farm has sent via you. Record each step as you collect, store and hand them over.</p>
+          {carrying.filter(s => s.status === 'in_transit').length === 0 ? <p className="text-sm text-gray-500">Nothing to handle right now.</p> : (
+            <div className="space-y-3">
+              {carrying.filter(s => s.status === 'in_transit').map(s => (
+                <ShipmentPanel key={s.shipmentId} shipment={s} account={account} who={who} canAct={canAct}
+                  config={config} participants={participants} onDone={refresh} compact />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Work waiting for this wallet */}
       {account && who?.authorized && who.role !== 'farmer' && (
         <>
           <div className="bg-white rounded-lg shadow-lg p-6">
-            <h3 className="text-lg font-bold text-gray-800 mb-3">2. On its way to you ({incoming.length})</h3>
+            <h3 className="text-lg font-bold text-gray-800 mb-3">3. On its way to you ({incoming.length})</h3>
             {incoming.length === 0 ? <p className="text-sm text-gray-500">Nothing on its way right now.</p> : (
               <div className="space-y-3">
                 {incoming.map(s => (
@@ -169,7 +189,7 @@ function SupplyChainPage({ onBack }) {
           </div>
 
           <div className="bg-white rounded-lg shadow-lg p-6">
-            <h3 className="text-lg font-bold text-gray-800 mb-3">3. With you now ({holding.length})</h3>
+            <h3 className="text-lg font-bold text-gray-800 mb-3">4. With you now ({holding.length})</h3>
             {holding.length === 0 ? <p className="text-sm text-gray-500">Nothing held right now.</p> : (
               <div className="space-y-3">
                 {holding.map(s => (
@@ -270,7 +290,7 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
     <div className={compact ? 'border border-gray-200 rounded-lg p-4' : 'bg-white rounded-lg shadow-lg p-6'}>
       {title && <h3 className="text-lg font-bold text-gray-800 mb-2">{title}</h3>}
       <p className="font-bold text-gray-800">#{s.shipmentId} · {formatQty(s.quantitySent, s.unit)} {s.productName}</p>
-      <p className="text-sm text-gray-600">{s.fromName} → {s.toName} · {STATUS_TEXT[s.status] || s.status}</p>
+      <p className="text-sm text-gray-600">{s.fromName} → {s.toName}{s.carrierName ? ` (via ${s.carrierName})` : ''} · {STATUS_TEXT[s.status] || s.status}</p>
       {s.status === 'delivered' && (
         <p className="text-sm text-gray-600">
           Received {formatQty(s.quantityReceived, s.unit)}{s.shortfall > 0 ? ` (⚠️ ${formatQty(s.shortfall, s.unit)} short)` : ''} · {formatQty(s.available, s.unit)} left

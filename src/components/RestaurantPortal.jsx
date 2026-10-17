@@ -754,7 +754,8 @@ function Deliveries({ authHeader, approved, onReceived }) {
             {incoming.map(s => (
               <div key={s.shipmentId} className="border-2 border-blue-200 bg-blue-50 rounded-lg p-4">
                 <p className="font-bold text-gray-800">{formatQty(s.quantitySent, s.unit)} {s.productName}</p>
-                <p className="text-sm text-gray-600">from {s.fromName} · delivery #{s.shipmentId}</p>
+                <p className="text-sm text-gray-600">from {s.fromName}{s.carrierName ? ` via ${s.carrierName}` : ''} · delivery #{s.shipmentId}</p>
+                {s.dispatchNotes && <p className="text-sm text-gray-600 italic">{s.fromName}: "{s.dispatchNotes}"</p>}
                 <div className="flex gap-2 mt-3 flex-wrap items-center">
                   <span className="text-sm text-gray-600">Received:</span>
                   <input type="number" step="any" min="0" max={s.quantitySent}
@@ -791,6 +792,7 @@ function Deliveries({ authHeader, approved, onReceived }) {
                     #{s.shipmentId} · received {formatQty(s.quantityReceived, s.unit)} of {formatQty(s.quantitySent, s.unit)}
                     {s.shortfall > 0 && <span className="text-orange-600 font-semibold"> · ⚠️ {formatQty(s.shortfall, s.unit)} short</span>}
                   </p>
+                  {s.deliveryNotes && <p className="text-xs text-gray-600 italic">Your note: "{s.deliveryNotes}"</p>}
                 </div>
                 <p className={`font-bold text-sm ${s.available > 0 ? 'text-gray-800' : 'text-red-600'}`}>{formatQty(s.available, s.unit)} left</p>
               </div>
