@@ -4,7 +4,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import RestaurantLogin    from './RestaurantLogin';
 import RestaurantRegister from './RestaurantRegister';
 import { AUTH_EVENT, announceAuth, clearCustomerSession } from '../authSession';
-import { lastStepText } from './walletHelpers';
+import { shortWhen } from './walletHelpers';
 
 const API_BASE = 'https://farm-passport-backend-v3.onrender.com/api';
 
@@ -757,8 +757,18 @@ function Deliveries({ authHeader, approved, onReceived }) {
                 <p className="font-bold text-gray-800">{formatQty(s.quantitySent, s.unit)} {s.productName}</p>
                 <p className="text-sm text-gray-600">from {s.fromName}{s.carrierName ? ` via ${s.carrierName}` : ''} · delivery #{s.shipmentId}</p>
                 {s.dispatchNotes && <p className="text-sm text-gray-600 italic">{s.fromName}: "{s.dispatchNotes}"</p>}
-                {s.lastStep && s.lastStep.stage !== 'Dispatched' && (
-                  <p className="text-xs text-teal-700 mt-1">📍 Latest: {lastStepText(s.lastStep)}</p>
+                {s.handlingSteps?.length > 0 && (
+                  <div className="mt-2 bg-white border border-teal-200 rounded-lg p-2">
+                    <p className="text-xs font-semibold text-teal-800 mb-1">📍 Updates on the way</p>
+                    <ul className="space-y-1">
+                      {s.handlingSteps.map((st, i) => (
+                        <li key={i} className="text-xs text-gray-700">
+                          <span className="text-gray-400">{shortWhen(st.recordedAt)}</span>{' '}
+                          <strong>{st.recorderName || st.stage}</strong>{st.notes ? `: ${st.notes}` : ` — ${st.stage}`}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
                 <div className="flex gap-2 mt-3 flex-wrap items-center">
                   <span className="text-sm text-gray-600">Received:</span>

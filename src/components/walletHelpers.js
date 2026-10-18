@@ -42,6 +42,10 @@ export function lastStepText(step) {
   return `${step.stage}${who ? ` · ${who}` : ''}${step.notes ? `: "${step.notes}"` : ''} · ${when}`;
 }
 
+/** Short time label, e.g. "17 Oct, 09:10" */
+export const shortWhen = (d) =>
+  new Date(d).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
 /** Make sure MetaMask is on Base Sepolia (adds the network if it's missing). */
 export async function ensureBaseSepolia() {
   const current = await window.ethereum.request({ method: 'eth_chainId' });
