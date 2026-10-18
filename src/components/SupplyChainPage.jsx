@@ -3,7 +3,7 @@ import axios from 'axios';
 import { ethers } from 'ethers';
 import JourneyTimeline from './JourneyTimeline';
 import {
-  API_BASE, EXPLORER, hasWallet, shortAddr, toScaled, formatQty, lastStepText,
+  API_BASE, EXPLORER, hasWallet, shortAddr, toScaled, formatQty, lastStepText, shortWhen,
   connectMetaMask, supplyChainWithSigner, sendAndConfirm, walletError,
 } from './walletHelpers';
 
@@ -268,6 +268,7 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
   const [error,  setError]  = useState(null);
   const [unsynced, setUnsynced] = useState(false);
   const [preset, setPreset] = useState(null);     // 'arrived' | 'out' quick steps for carried shipments
+  const [showAll, setShowAll] = useState(false);  // show every update, not just the latest
 
   const mine = account && s.toAddress === account.toLowerCase();
   const carried = account && s.carrierAddress === account.toLowerCase();
@@ -343,7 +344,30 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
         </p>
       )}
       <p className="font-mono text-xs text-gray-400">{s.batchId}</p>
-      {s.lastStep && (
+      {s.dispatchNotes && (
+        <p className="text-xs text-gray-600 italic mt-1">{s.fromName}: "{s.dispatchNotes}"</p>
+      )}
+      {s.handlingSteps?.length > 0 ? (
+        <div className="text-xs text-teal-700 bg-teal-50 rounded px-2 py-1 mt-2">
+          {showAll ? (
+            <ul className="space-y-0.5">
+              {s.handlingSteps.map((st, i) => (
+                <li key={i}>
+                  📍 <span className="text-gray-500">{shortWhen(st.recordedAt)}</span> · {st.recorderName || st.stage}
+                  {st.notes ? `: ${st.notes}` : ` — ${st.stage}`}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>📍 Latest: {lastStepText(s.handlingSteps[s.handlingSteps.length - 1])}</p>
+          )}
+          {s.handlingSteps.length > 1 && (
+            <button onClick={() => setShowAll(v => !v)} className="text-blue-600 hover:underline mt-1">
+              {showAll ? 'Show latest only' : `Show all ${s.handlingSteps.length} updates`}
+            </button>
+          )}
+        </div>
+      ) : s.lastStep && (
         <p className="text-xs text-teal-700 bg-teal-50 rounded px-2 py-1 mt-2">📍 Latest: {lastStepText(s.lastStep)}</p>
       )}
 
