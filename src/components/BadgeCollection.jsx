@@ -192,6 +192,18 @@ function BadgeCollection({ userEmail, authToken, onBack, onLoginRequired }) {
                         Unlocked: {new Date(unlockDate).toLocaleDateString()}
                       </p>
                     )}
+
+                    {/* ⭐ stamps from more receipts of the same batch */}
+                    {badge.stamps?.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-green-200">
+                        <p className="text-sm font-semibold text-amber-700">
+                          {'⭐'.repeat(Math.min(badge.stamps.length, 5))} Supported {badge.supportCount}×
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          also via {[...new Set(badge.stamps.map(s => s.restaurantName))].join(', ')}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </div>
               );

@@ -19,6 +19,11 @@ function BadgeCard({ badge }) {
   const productName = badge.productName || badge.product_name;
   const unlockDate = badge.unlockDate || badge.unlocked_at;
 
+  // ⭐ Stamps: more receipts from this same batch (claimed after the badge)
+  const stamps = badge.stamps || [];
+  const supportCount = badge.supportCount || 1 + stamps.length;
+  const alsoVia = [...new Set(stamps.map(s => s.restaurantName).filter(r => r && r !== restaurantName))];
+
   // Determine styling based on rarity
   let borderStyle = 'border-green-200';
   let bgStyle = 'from-green-50 to-blue-50';
@@ -57,6 +62,16 @@ function BadgeCard({ badge }) {
         </div>
       )}
 
+      {/* Stamps count (bottom right) */}
+      {stamps.length > 0 && (
+        <div
+          className="absolute -bottom-2 -right-2 bg-amber-400 text-white text-xs font-bold px-2 py-1 rounded-full shadow"
+          title={stamps.map(s => `⭐ ${s.restaurantName} · ${new Date(s.stampedAt).toLocaleDateString('en-GB')}`).join('\n')}
+        >
+          ⭐ {supportCount}×
+        </div>
+      )}
+
       <div className="text-center mt-2">
         <div className="text-3xl mb-2">🏅</div>
         
@@ -71,8 +86,15 @@ function BadgeCard({ badge }) {
         )}
         
         {restaurantName && (
-          <p className="text-xs text-orange-600 font-semibold mb-2">
+          <p className={`text-xs text-orange-600 font-semibold ${alsoVia.length ? 'mb-0.5' : 'mb-2'}`}>
             🍽️ {restaurantName}
+          </p>
+        )}
+
+        {/* Other places this batch reached the user through */}
+        {alsoVia.length > 0 && (
+          <p className="text-xs text-amber-700 mb-2 line-clamp-2">
+            ⭐ also via {alsoVia.join(', ')}
           </p>
         )}
 
