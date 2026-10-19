@@ -163,10 +163,12 @@ function SupplyChainPage({ onBack }) {
 
       {/* Work for this wallet: arriving → in stock → carrying for others → history */}
       {account && who?.authorized && who.role !== 'farmer' && (() => {
-        const carryingNow = carrying.filter(s => s.status === 'in_transit');
+        // Delivered before the depot logged its steps → stays here so they can be caught up
+        const needsCatchUp = (s) => s.status === 'delivered' && (!s.carrierSteps?.arrived || !s.carrierSteps?.out);
+        const carryingNow = carrying.filter(s => s.status === 'in_transit' || needsCatchUp(s));
         const history = [
           ...outbound.map(s => ({ ...s, kind: 'sent' })),
-          ...carrying.filter(s => s.status !== 'in_transit').map(s => ({ ...s, kind: 'carried' })),
+          ...carrying.filter(s => s.status !== 'in_transit' && !needsCatchUp(s)).map(s => ({ ...s, kind: 'carried' })),
         ].sort((a, b) => b.shipmentId - a.shipmentId);
         const section = ({ n, title, hint, items, empty }) => (   // plain function so open forms aren't reset
           <div className="bg-white rounded-lg shadow-lg p-6">
@@ -187,7 +189,7 @@ function SupplyChainPage({ onBack }) {
             {section({ n: 2, title: "Arriving", items: incoming, hint: "Stock sent to you. Confirm how much arrived when it gets here.", empty: "Nothing on its way to you." })}
             {section({ n: 3, title: "In stock", items: holding, hint: "Stock you've received. Send some on to a business when it leaves.", empty: "Nothing in stock." })}
             {who.role === 'handler' && (
-              section({ n: 4, title: "Carrying for others", items: carryingNow, hint: "Shipments going to someone else via you. Record each step as you collect, store and hand them over — the receiver confirms delivery.", empty: "Nothing to carry right now." })
+              section({ n: 4, title: "Carrying for others", items: carryingNow, hint: "Shipments going to someone else via you. Record each step as you collect, store and hand them over — the receiver confirms delivery. If something was delivered before you logged it, catch up the missed steps here.", empty: "Nothing to carry right now." })
             )}
             <details className="bg-white rounded-lg shadow-lg p-6">
               <summary className="text-lg font-bold text-gray-800 cursor-pointer">
@@ -289,6 +291,8 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
   const carriedStatus = progress.out ? '🚚 Out for delivery'
     : progress.arrived ? `📦 At ${who?.name || 'depot'}` : null;
   const nextQuick = !progress.arrived ? 'arrived' : !progress.out ? 'out' : null;
+  // Delivered before this depot / courier logged its steps — they can still be added, marked as late
+  const late = carried && s.status === 'delivered' && !!nextQuick;
 
   const open = (m, presetKey = null) => {
     setMode(m); setError(null); setTxHash(null); setStatus('idle'); setNotes('');
@@ -316,7 +320,9 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
             Date.now() - new Date(c.recordedAt).getTime() < 10 * 60 * 1000);
           if (recent && !window.confirm(`You already recorded "${stage}" on this shipment in the last 10 minutes. Record another?`)) return;
         } catch (_) {}
-        const fullNotes = (preset ? [PRESETS[preset], notes.trim()].filter(Boolean).join(' — ') : notes.trim()).slice(0, 280);
+        const fullNotes = (preset
+          ? [PRESETS[preset], notes.trim(), late ? '(logged after delivery)' : ''].filter(Boolean).join(' — ')
+          : notes.trim()).slice(0, 280);
         result = await sendAndConfirm(contract, 'addCheckpoint', [ethers.ZeroAddress, s.batchId, s.shipmentId, stage, where.trim(), fullNotes], setStatus);
       }
       setTxHash(result.hash);
@@ -387,6 +393,16 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
           )}
           {carried && s.status === 'in_transit' && stages.length > 0 && nextQuick === 'out' && (
             <button onClick={() => open('step', 'out')} className="bg-blue-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-blue-700">🚚 Out for delivery</button>
+          )}
+          {late && stages.length > 0 && (
+            <>
+              <p className="w-full text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                ⚠️ {s.toName} confirmed delivery before you logged these steps. Add them now so the journey is complete — they'll show as logged after delivery.
+              </p>
+              <button onClick={() => open('step', nextQuick)} className="bg-amber-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-amber-700">
+                {nextQuick === 'arrived' ? '📦 Log missed: Arrived with us' : '🚚 Log missed: Out for delivery'}
+              </button>
+            </>
           )}
           {carried && s.status === 'in_transit' && !nextQuick && (
             <p className="text-sm text-gray-600 self-center">⏳ Waiting for {s.toName} to confirm delivery</p>

@@ -89,9 +89,34 @@ function checkpointStep(c, shipment, unit) {
 
 // Steps for one shipment (dispatch → handling → delivery), optionally without sales
 function shipmentSteps(shipment, checkpoints, unit, { includeSales = false } = {}) {
-  const steps = checkpoints
-    .filter(c => c.shipmentId === shipment.shipmentId && (includeSales || c.stage !== 'Sold'))
-    .map(c => checkpointStep(c, shipment, unit));
+  const mine = checkpoints.filter(c => c.shipmentId === shipment.shipmentId && (includeSales || c.stage !== 'Sold'));
+  const deliveredAt = shipment.deliveredAt ? new Date(shipment.deliveredAt).getTime() : null;
+  const carrier = (shipment.carrierAddress || '').toLowerCase();
+
+  // Keep the story in order: depot / courier steps before "Arrived at <cafe>",
+  // even if some were logged after the delivery was confirmed (those are labelled)
+  const isDelivery = (c) => (c.stage || '').toLowerCase() === 'delivered';
+  const ordered = [...mine.filter(c => !isDelivery(c)), ...mine.filter(isDelivery)];
+
+  const steps = ordered.map(c => {
+    const step = checkpointStep(c, shipment, unit);
+    const loggedLate = deliveredAt && !isDelivery(c) && c.stage !== 'Sold' && carrier &&
+      c.recordedBy === carrier && new Date(c.recordedAt).getTime() > deliveredAt;
+    if (loggedLate) {
+      step.notes = (step.notes || '').replace(/\s*—?\s*\(logged after delivery\)/, '') || null;
+      step.subtitle = [step.subtitle, 'logged after delivery'].filter(Boolean).join(' · ');
+    }
+    return step;
+  });
+
+  // Went via a depot / courier that logged nothing: still show the hand-off so the chain reads complete
+  const carrierLogged = carrier && mine.some(c => c.recordedBy === carrier && !isDelivery(c));
+  if (shipment.carrierName && !carrierLogged && shipment.status === 'delivered') {
+    const at = steps.findIndex(st => st.key && mine.find(c => `cp-${c.index}` === st.key && isDelivery(c)));
+    const passStep = { key: `via-${shipment.shipmentId}`, icon: '📦', title: `Passed through ${shipment.carrierName}`, subtitle: 'on the way to ' + shipment.toName };
+    if (at >= 0) steps.splice(at, 0, passStep); else steps.push(passStep);
+  }
+
   if (shipment.status === 'in_transit') {
     steps.push({
       key: `wait-${shipment.shipmentId}`, icon: '⏳', pending: true,
