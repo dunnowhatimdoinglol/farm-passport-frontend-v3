@@ -721,6 +721,11 @@ function Deliveries({ authHeader, approved, onReceived }) {
   useEffect(() => { load(); }, []);
 
   const receive = async (s) => {
+    // The depot / courier hasn't logged "Out for delivery" — allowed (the goods are here), but double-check
+    if (s.carrierName && !s.carrierSteps?.out &&
+        !window.confirm(`${s.carrierName} hasn't marked this as out for delivery yet.\n\nHas it physically arrived with you? Confirm anyway?`)) {
+      return;
+    }
     setBusyId(s.shipmentId);
     setError(null);
     try {
@@ -770,9 +775,14 @@ function Deliveries({ authHeader, approved, onReceived }) {
                     </ul>
                   </div>
                 )}
+                {s.carrierName && !s.carrierSteps?.out && (
+                  <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2">
+                    ⚠️ {s.carrierName} hasn't marked this as out for delivery yet. You can still confirm it if it has arrived.
+                  </p>
+                )}
                 <div className="flex gap-2 mt-3 flex-wrap items-center">
                   <span className="text-sm text-gray-600">Received:</span>
-                  <input type="number" step="any" min="0" max={s.quantitySent}
+                <input type="number" step="any" min="0" max={s.quantitySent}
                     value={qty[s.shipmentId] ?? s.quantitySent}
                     onChange={(e) => setQty({ ...qty, [s.shipmentId]: e.target.value })}
                     className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-sm" />

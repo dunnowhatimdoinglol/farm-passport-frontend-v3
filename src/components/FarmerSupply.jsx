@@ -298,6 +298,9 @@ export function FarmerShipments({ farmerToken, refreshKey = 0, onChanged }) {
                   Received {formatQty(s.quantityReceived, s.unit)}{s.shortfall > 0 ? ` · ⚠️ ${formatQty(s.shortfall, s.unit)} short` : ''}
                 </p>
               )}
+              {s.status === 'delivered' && s.carrierName && !s.carrierSteps?.out && (
+                <p className="text-xs text-amber-700 mt-1">⚠️ {s.carrierName} didn't log "Out for delivery"</p>
+              )}
               {s.deliveryNotes && (
                 <p className="text-xs text-gray-600 italic mt-1">{s.toName}: "{s.deliveryNotes}"</p>
               )}

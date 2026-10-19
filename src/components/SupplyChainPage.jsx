@@ -211,6 +211,9 @@ function SupplyChainPage({ onBack }) {
                             {s.deliveryNotes ? ` · "${s.deliveryNotes}"` : ''}
                           </p>
                         )}
+                        {s.kind === 'carried' && s.status === 'delivered' && !s.carrierSteps?.out && (
+                          <p className="text-xs text-amber-700">⚠️ Delivered before you logged "Out for delivery"</p>
+                        )}
                       </div>
                       <span className={`text-xs font-semibold px-2 py-0.5 rounded-full h-fit ${
                         s.status === 'delivered' ? 'bg-green-100 text-green-700' : s.status === 'in_transit' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
