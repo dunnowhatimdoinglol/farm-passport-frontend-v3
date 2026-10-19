@@ -22,6 +22,7 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack, onLoginRequired 
   const [claiming,   setClaiming]   = useState(false);
   const [claimError, setClaimError] = useState(null);
   const [claimed,    setClaimed]    = useState(false);
+  const [stamp,      setStamp]      = useState(null);   // set when this receipt became a stamp on an existing badge
 
   // Achievement popup state
   const [achievements, setAchievements] = useState([]);
@@ -71,6 +72,16 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack, onLoginRequired 
       );
 
       setClaimed(true);
+
+      // Already had this batch's badge → this receipt was added as a stamp instead
+      if (res.data.stamp) {
+        setStamp(res.data);
+        if (res.data.newAchievements && res.data.newAchievements.length > 0) {
+          setAchievements(res.data.newAchievements);
+          setCurrentAchievement(res.data.newAchievements[0]);
+        }
+        return;
+      }
 
       // Show achievement popups if any were unlocked
       if (res.data.newAchievements && res.data.newAchievements.length > 0) {
@@ -240,7 +251,21 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack, onLoginRequired 
         </div>
       )}
 
-      {claimed ? (
+      {stamp ? (
+        <div className="bg-white rounded-lg shadow-lg p-8">
+          <div className="text-center">
+            <div className="text-6xl mb-4">⭐</div>
+            <h3 className="text-2xl font-bold text-green-700 mb-2">Stamp added!</h3>
+            <p className="text-gray-700">
+              You've already got <strong>{stamp.farmName}</strong>'s {stamp.productName || ''} badge —
+              we've added a <strong>{stamp.restaurantName}</strong> stamp to it.
+            </p>
+            <p className="text-green-700 font-semibold mt-3">
+              You've now supported this harvest {stamp.supportCount}×
+            </p>
+          </div>
+        </div>
+      ) : claimed ? (
         <div className="bg-white rounded-lg shadow-lg p-8">
           <div className="text-center">
             <div className="text-6xl mb-4">🎖️</div>
