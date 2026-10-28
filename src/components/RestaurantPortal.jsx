@@ -5,6 +5,7 @@ import RestaurantLogin    from './RestaurantLogin';
 import RestaurantRegister from './RestaurantRegister';
 import { AUTH_EVENT, announceAuth, clearCustomerSession } from '../authSession';
 import { shortWhen } from './walletHelpers';
+import { PhotoPicker, DeliveryPhotoButton } from './DeliveryPhoto';
 
 // Prices are only shown to the farm and the restaurant — never on the customer journey
 const gbp = (v) => (v === null || v === undefined || isNaN(Number(v))) ? null : `£${Number(v).toFixed(2)}`;
@@ -728,8 +729,10 @@ function Deliveries({ authHeader, approved, onReceived }) {
   const [loading,   setLoading]   = useState(true);
   const [qty,       setQty]       = useState({});   // shipmentId → quantity received
   const [notes,     setNotes]     = useState({});
+  const [photos,    setPhotos]    = useState({});   // shipmentId → { file, preview } (proof of delivery)
   const [busyId,    setBusyId]    = useState(null);
   const [error,     setError]     = useState(null);
+  const token = (authHeader?.headers?.Authorization || '').replace('Bearer ', '');
 
   const load = async () => {
     try {
@@ -749,13 +752,20 @@ function Deliveries({ authHeader, approved, onReceived }) {
         !window.confirm(`${s.carrierName} hasn't marked this as out for delivery yet.\n\nHas it physically arrived with you? Confirm anyway?`)) {
       return;
     }
+    // A photo is optional, but encouraged
+    const photo = photos[s.shipmentId];
+    if (!photo && !window.confirm('No delivery photo added.\n\nA photo helps settle any disagreement about what arrived. Confirm without one?')) {
+      return;
+    }
     setBusyId(s.shipmentId);
     setError(null);
     try {
-      await axios.post(`${API_BASE}/restaurant/shipments/${s.shipmentId}/receive`, {
-        quantityReceived: qty[s.shipmentId] ?? s.quantitySent,
-        notes: notes[s.shipmentId] || '',
-      }, authHeader);
+      const form = new FormData();
+      form.append('quantityReceived', String(qty[s.shipmentId] ?? s.quantitySent));
+      form.append('notes', notes[s.shipmentId] || '');
+      if (photo) form.append('photo', photo.file, 'delivery.jpg');
+      await axios.post(`${API_BASE}/restaurant/shipments/${s.shipmentId}/receive`, form, authHeader);
+      const next = { ...photos }; delete next[s.shipmentId]; setPhotos(next);
       await load();
       onReceived?.();
     } catch (err) {
@@ -815,9 +825,14 @@ function Deliveries({ authHeader, approved, onReceived }) {
                   value={notes[s.shipmentId] || ''}
                   onChange={(e) => setNotes({ ...notes, [s.shipmentId]: e.target.value })}
                   className="w-full mt-2 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+                <PhotoPicker
+                  photo={photos[s.shipmentId]}
+                  onChange={(p) => setPhotos({ ...photos, [s.shipmentId]: p })}
+                  disabled={busyId === s.shipmentId}
+                />
                 <button onClick={() => receive(s)} disabled={busyId === s.shipmentId || !approved}
                   className="mt-3 bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
-                  {busyId === s.shipmentId ? '⛓️ Recording…' : '✅ Confirm received'}
+                  {busyId === s.shipmentId ? (photos[s.shipmentId] ? '📷 Uploading & recording…' : '⛓️ Recording…') : '✅ Confirm received'}
                 </button>
               </div>
             ))}
@@ -840,6 +855,7 @@ function Deliveries({ authHeader, approved, onReceived }) {
                     {s.shortfall > 0 && <span className="text-orange-600 font-semibold"> · ⚠️ {formatQty(s.shortfall, s.unit)} short</span>}
                   </p>
                   {s.deliveryNotes && <p className="text-xs text-gray-600 italic">Your note: "{s.deliveryNotes}"</p>}
+                  {s.hasDeliveryPhoto && <DeliveryPhotoButton shipmentId={s.shipmentId} token={token} />}
                 </div>
                 <p className={`font-bold text-sm ${s.available > 0 ? 'text-gray-800' : 'text-red-600'}`}>{formatQty(s.available, s.unit)} left</p>
               </div>

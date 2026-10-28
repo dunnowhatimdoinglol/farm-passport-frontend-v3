@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { API_BASE, EXPLORER, formatQty, shortWhen } from './walletHelpers';
+import { DeliveryPhotoButton } from './DeliveryPhoto';
 
 // Money helpers — prices are only ever shown to the farm and the restaurant
 export const gbp = (v) => (v === null || v === undefined || v === '' || isNaN(Number(v)))
@@ -361,6 +362,7 @@ export function FarmerShipments({ farmerToken, refreshKey = 0, onChanged }) {
               {s.deliveryNotes && (
                 <p className="text-xs text-gray-600 italic mt-1">{s.toName}: "{s.deliveryNotes}"</p>
               )}
+              {s.hasDeliveryPhoto && <DeliveryPhotoButton shipmentId={s.shipmentId} token={farmerToken} />}
             </div>
             <div className="text-right space-y-1">
               <Badge status={s.status} />

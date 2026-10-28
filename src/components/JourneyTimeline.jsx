@@ -31,6 +31,7 @@ function StepList({ steps }) {
             <p className="font-bold text-gray-800">{s.title}</p>
             {s.subtitle && <p className={`text-sm ${s.warn ? 'text-orange-600 font-semibold' : 'text-gray-600'}`}>{s.subtitle}</p>}
             {s.notes && <p className="text-sm text-gray-500 italic">"{s.notes}"</p>}
+            {s.hasPhoto && <p className="text-xs text-green-700 mt-0.5">📷 Delivery photo on record</p>}
             <div className="flex flex-wrap gap-x-3 text-xs text-gray-400 mt-1">
               {s.date && <span>{formatDate(s.date)}</span>}
               {s.txHash && (
@@ -49,7 +50,7 @@ function StepList({ steps }) {
 // One checkpoint → one step, written as what happened
 function checkpointStep(c, shipment, unit) {
   const stage = (c.stage || '').toLowerCase();
-  const base = { key: `cp-${c.index}`, icon: iconFor(c.stage), notes: c.notes, date: c.recordedAt, txHash: c.txHash };
+  const base = { key: `cp-${c.index}`, icon: iconFor(c.stage), notes: c.notes, date: c.recordedAt, txHash: c.txHash, hasPhoto: !!c.hasPhoto };
   if (stage === 'dispatched') {
     return {
       ...base,
