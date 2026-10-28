@@ -13,6 +13,9 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
   const [showCreateBatch, setShowCreateBatch] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [dispatchBatchId, setDispatchBatchId] = useState(null);   // which batch's "Send" form is open
+  const [priceEdit, setPriceEdit] = useState({});   // batchId → price being typed (only while editing)
+  const [priceSaving, setPriceSaving] = useState(null);
+  const [priceError, setPriceError] = useState({});
   const authHeader = { headers: { Authorization: `Bearer ${farmerToken}` } };
 
   // Bio editing state
@@ -170,6 +173,31 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
   const { farmer, batches } = farmerData;
   const approved = farmer.approvalStatus === 'approved';
   const refreshAll = () => setRefreshTrigger(prev => prev + 1);
+
+  // Save (or clear) the default price per unit for a batch — only the farm & restaurants see it
+  const saveBatchPrice = async (batchId) => {
+    const raw = priceEdit[batchId];
+    const value = raw === '' || raw === undefined ? null : Number(raw);
+    if (value !== null && (isNaN(value) || value < 0)) {
+      setPriceError({ ...priceError, [batchId]: 'Enter a price of 0 or more' });
+      return;
+    }
+    setPriceSaving(batchId);
+    setPriceError({ ...priceError, [batchId]: null });
+    try {
+      await axios.put(
+        `https://farm-passport-backend-v3.onrender.com/api/farmer/batches/${encodeURIComponent(batchId)}/price`,
+        { pricePerUnit: value },
+        { headers: { Authorization: `Bearer ${farmerToken}` } }
+      );
+      const next = { ...priceEdit }; delete next[batchId]; setPriceEdit(next);
+      refreshAll();
+    } catch (err) {
+      setPriceError({ ...priceError, [batchId]: err.response?.data?.error || 'Could not save price' });
+    } finally {
+      setPriceSaving(null);
+    }
+  };
 
   return (
     <div className="max-w-6xl mx-auto">
@@ -498,6 +526,49 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
                       <span className="font-semibold text-gray-800 ml-1">
                         {formatQty(batch.quantityRemaining ?? batch.quantity, unit)}
                       </span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <span className="text-gray-500">Price:</span>
+                      {priceEdit[batchId] === undefined ? (
+                        <>
+                          <span className="font-semibold text-gray-800 ml-1">
+                            {batch.pricePerUnit != null ? `£${Number(batch.pricePerUnit).toFixed(2)} per ${unit}` : 'not set'}
+                          </span>
+                          <button
+                            onClick={() => setPriceEdit({ ...priceEdit, [batchId]: batch.pricePerUnit ?? '' })}
+                            className="text-green-700 text-xs font-semibold hover:underline ml-1"
+                          >
+                            ✏️ {batch.pricePerUnit != null ? 'Change' : 'Set price'}
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="ml-1">£</span>
+                          <input
+                            type="number" step="0.01" min="0"
+                            value={priceEdit[batchId]}
+                            onChange={(e) => setPriceEdit({ ...priceEdit, [batchId]: e.target.value })}
+                            placeholder="0.00"
+                            className="w-20 px-2 py-1 border border-gray-300 rounded"
+                            disabled={priceSaving === batchId}
+                          />
+                          <span className="text-gray-500 text-xs">per {unit}</span>
+                          <button
+                            onClick={() => saveBatchPrice(batchId)}
+                            disabled={priceSaving === batchId}
+                            className="text-xs bg-green-600 text-white px-2 py-1 rounded hover:bg-green-700 disabled:bg-gray-400"
+                          >
+                            {priceSaving === batchId ? 'Saving…' : 'Save'}
+                          </button>
+                          <button
+                            onClick={() => { const n = { ...priceEdit }; delete n[batchId]; setPriceEdit(n); }}
+                            className="text-xs text-gray-500 hover:underline"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      )}
+                      {priceError[batchId] && <span className="text-xs text-red-600 ml-1">{priceError[batchId]}</span>}
                     </div>
                     {approved && Number(batch.quantityRemaining ?? batch.quantity) > 0 && dispatchBatchId !== batchId && (
                       <button

@@ -6,6 +6,9 @@ import RestaurantRegister from './RestaurantRegister';
 import { AUTH_EVENT, announceAuth, clearCustomerSession } from '../authSession';
 import { shortWhen } from './walletHelpers';
 
+// Prices are only shown to the farm and the restaurant — never on the customer journey
+const gbp = (v) => (v === null || v === undefined || isNaN(Number(v))) ? null : `£${Number(v).toFixed(2)}`;
+
 const API_BASE = 'https://farm-passport-backend-v3.onrender.com/api';
 
 // Formats a quantity with its unit, e.g. 2000 + "kg" → "2,000 kg"
@@ -634,7 +637,7 @@ function OrderStock({ authHeader, approved }) {
               <option value="">— Choose a product —</option>
               {catalog.map(b => (
                 <option key={b.batchId} value={b.batchId}>
-                  {b.productName} — {b.farmName || 'Farm'} · {formatQty(b.remaining, b.unit)} available
+                  {b.productName} — {b.farmName || 'Farm'} · {formatQty(b.remaining, b.unit)} available{b.pricePerUnit != null ? ` · ${gbp(b.pricePerUnit)}/${b.unit}` : ''}
                 </option>
               ))}
             </select>
@@ -647,6 +650,19 @@ function OrderStock({ authHeader, approved }) {
                 className="w-full pl-4 pr-16 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent" />
               {batch?.unit && <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">{batch.unit}</span>}
             </div>
+            {batch && (
+              <p className="text-sm text-gray-600 mt-2">
+                {batch.pricePerUnit != null ? (
+                  <>
+                    {gbp(batch.pricePerUnit)} per {batch.unit}
+                    {Number(quantity) > 0 && <> · estimated <strong>{gbp(Number(quantity) * batch.pricePerUnit)}</strong></>}
+                    <span className="block text-xs text-gray-400">The farm confirms the final price and any delivery charge when it dispatches.</span>
+                  </>
+                ) : (
+                  <span className="text-gray-400">No price listed — the farm will confirm the price when it dispatches.</span>
+                )}
+              </p>
+            )}
           </div>
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-2">Note to the farm <span className="font-normal text-gray-400">(optional)</span></label>
@@ -675,6 +691,13 @@ function OrderStock({ authHeader, approved }) {
                   <p className="font-semibold text-gray-800">{formatQty(o.quantity, o.unit)} {o.productName} — {o.farmName}</p>
                   <p className="text-xs text-gray-500">{new Date(o.createdAt).toLocaleDateString('en-GB')}{o.note ? ` · "${o.note}"` : ''}</p>
                   {o.farmerNote && <p className="text-xs text-gray-600 italic">Farm: "{o.farmerNote}"</p>}
+                  {o.total != null && (
+                    <p className="text-xs text-gray-700">
+                      💷 {o.unitPrice != null && <>{gbp(o.unitPrice)}/{o.unit}</>}
+                      {o.deliveryFee ? <> + {gbp(o.deliveryFee)} delivery</> : null}
+                      {' '}= <strong>{gbp(o.total)}</strong>{o.totalIsEstimate ? ' (estimate)' : ''}
+                    </p>
+                  )}
                 </div>
                 <div className="text-right space-y-1">
                   <span className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full ${STATUS[o.status]?.[1] || ''}`}>

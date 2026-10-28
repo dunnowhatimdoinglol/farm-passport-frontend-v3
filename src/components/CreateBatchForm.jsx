@@ -9,6 +9,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
   const [productName, setProductName] = useState('');
   const [quantity, setQuantity] = useState('');
   const [unit, setUnit] = useState('kg');
+  const [pricePerUnit, setPricePerUnit] = useState('');   // optional, £ — only farm & restaurants see it
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showSuccess, setShowSuccess] = useState(false);
@@ -40,6 +41,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
         productName,
         quantity: parseInt(quantity),
         unit,
+        pricePerUnit: pricePerUnit === '' ? null : Number(pricePerUnit),
         season: season === 'auto' ? null : season 
       }, { headers: { Authorization: `Bearer ${farmerToken}` } });
 
@@ -182,6 +184,23 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
             </select>
           </div>
           </div>
+
+        {/* Price field (optional) */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Price per {unit} (£) <span className="text-gray-400 font-normal">— optional</span>
+          </label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={pricePerUnit}
+            onChange={(e) => setPricePerUnit(e.target.value)}
+            placeholder="e.g., 2.50"
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+          />
+          <p className="text-xs text-gray-500 mt-1">Restaurants see this when ordering. You can change it later, or per order. Customers never see prices.</p>
+        </div>
 
         {/* Season field */}
         <div>

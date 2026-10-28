@@ -3,6 +3,11 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { API_BASE, EXPLORER, formatQty, shortWhen } from './walletHelpers';
 
+// Money helpers — prices are only ever shown to the farm and the restaurant
+export const gbp = (v) => (v === null || v === undefined || v === '' || isNaN(Number(v)))
+  ? null : `£${Number(v).toFixed(2)}`;
+const toNum = (v) => (v === '' || v === null || v === undefined || isNaN(Number(v))) ? null : Number(v);
+
 const STATUS_BADGE = {
   requested:  'bg-yellow-100 text-yellow-800',
   dispatched: 'bg-green-100 text-green-700',
@@ -34,6 +39,8 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
   const [error,   setError]   = useState(null);
   const [qty,     setQty]     = useState({});     // orderId → quantity to send
   const [via,     setVia]     = useState({});     // orderId → depot / courier address ('' = direct)
+  const [price,   setPrice]   = useState({});     // orderId → price per unit (£) for this order
+  const [fee,     setFee]     = useState({});     // orderId → delivery charge (£)
   const [carriers, setCarriers] = useState([]);   // registered depots / couriers
   const auth = { headers: { Authorization: `Bearer ${farmerToken}` } };
 
@@ -95,6 +102,11 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                   </p>
                   <p className="font-mono text-xs text-gray-500">{o.batchId}</p>
                   {o.note && <p className="text-sm text-gray-600 italic mt-1">"{o.note}"</p>}
+                  <p className="text-xs text-gray-500 mt-1">
+                    {o.unitPrice != null
+                      ? <>Your listed price: {gbp(o.unitPrice)} per {o.unit}</>
+                      : <>No price set on this batch — add one below</>}
+                  </p>
                 </div>
                 <Badge status={o.status} />
               </div>
@@ -116,8 +128,46 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                   <option value="">Direct (own delivery)</option>
                   {carriers.map(c => <option key={c.address} value={c.address}>via {c.name}</option>)}
                 </select>
+              </div>
+              {(() => {
+                const q  = toNum(qty[o.id] ?? o.quantity) || 0;
+                const up = toNum(price[o.id] ?? o.unitPrice);
+                const df = toNum(fee[o.id]) || 0;
+                const total = up != null ? Math.round((q * up + df) * 100) / 100 : null;
+                return (
+                  <div className="flex gap-2 mt-2 flex-wrap items-center text-sm">
+                    <label className="text-gray-600">£ per {o.unit}</label>
+                    <input
+                      type="number" step="0.01" min="0"
+                      value={price[o.id] ?? (o.unitPrice ?? '')}
+                      onChange={(e) => setPrice({ ...price, [o.id]: e.target.value })}
+                      placeholder="0.00"
+                      className="w-24 px-3 py-2 border border-gray-300 rounded-lg"
+                      disabled={busyId === o.id}
+                    />
+                    <label className="text-gray-600 ml-2">🚚 Delivery £</label>
+                    <input
+                      type="number" step="0.01" min="0"
+                      value={fee[o.id] ?? ''}
+                      onChange={(e) => setFee({ ...fee, [o.id]: e.target.value })}
+                      placeholder="0.00"
+                      className="w-24 px-3 py-2 border border-gray-300 rounded-lg"
+                      disabled={busyId === o.id}
+                    />
+                    <span className="ml-2 font-semibold text-gray-800">
+                      {total != null ? <>Total: {gbp(total)}</> : <span className="text-gray-400 font-normal">Total shows once a price is set</span>}
+                    </span>
+                  </div>
+                );
+              })()}
+              <div className="flex gap-2 mt-3 flex-wrap items-center">
                 <button
-                  onClick={() => act(o, 'dispatch', { quantity: qty[o.id] ?? o.quantity, via: via[o.id] || undefined })}
+                  onClick={() => act(o, 'dispatch', {
+                    quantity: qty[o.id] ?? o.quantity,
+                    via: via[o.id] || undefined,
+                    unitPrice: toNum(price[o.id] ?? o.unitPrice) ?? undefined,
+                    deliveryFee: toNum(fee[o.id]) ?? undefined,
+                  })}
                   disabled={busyId === o.id || !approved}
                   className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400"
                 >
@@ -143,6 +193,13 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                 <p className="font-semibold text-gray-800">{o.restaurantName} · {formatQty(o.quantitySent ?? o.quantity, o.unit)} {o.productName}</p>
                 <p className="font-mono text-xs text-gray-500">{o.batchId}{o.shipmentId ? ` · shipment #${o.shipmentId}` : ''}</p>
                 {o.shipmentStatus && <p className="text-xs text-gray-500 mt-1">Shipment: {STATUS_LABEL[o.shipmentStatus] || o.shipmentStatus}</p>}
+                {o.total != null && (
+                  <p className="text-xs text-gray-700 mt-1">
+                    💷 {o.unitPrice != null && <>{gbp(o.unitPrice)}/{o.unit}</>}
+                    {o.deliveryFee ? <> + {gbp(o.deliveryFee)} delivery</> : null}
+                    {' '}= <strong>{gbp(o.total)}</strong>{o.totalIsEstimate ? ' (estimate)' : ''}
+                  </p>
+                )}
               </div>
               <div className="text-right space-y-1">
                 <Badge status={o.status} />
