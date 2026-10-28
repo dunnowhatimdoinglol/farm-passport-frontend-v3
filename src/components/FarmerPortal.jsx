@@ -4,8 +4,8 @@ import axios from 'axios';
 import { ethers } from 'ethers';
 import { walletSignIn, hasWallet, connectMetaMask, metaMaskSign, walletError } from './walletHelpers';
 
-function FarmerPortal({ onBackToCustomer }) {
-  const [view, setView] = useState('login');
+function FarmerPortal({ onBackToCustomer, startOn = null }) {
+  const [view, setView] = useState(startOn === 'register' ? 'register' : 'login');
   const [privateKey, setPrivateKey] = useState('');
   const [farmerAddress, setFarmerAddress] = useState('');
   const [registrationData, setRegistrationData] = useState(null);

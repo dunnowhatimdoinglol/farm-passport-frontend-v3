@@ -17,6 +17,7 @@ import VerifyEmail from './components/VerifyEmail';
 import Leaderboard from './components/Leaderboard';
 import SupplyChainPage from './components/SupplyChainPage';
 import AdminPage from './components/AdminPage';
+import HomePage from './components/HomePage';
 import { parseFarmLink } from './components/walletHelpers';
 import {
   AUTH_EVENT, announceAuth,
@@ -36,7 +37,8 @@ function App() {
   const [authView,      setAuthView]      = useState('login'); // 'login' | 'register'
 
   // ── View routing ──
-  const [currentView,      setCurrentView]      = useState('scanner');
+  const [currentView,      setCurrentView]      = useState('home');
+  const [portalStart,      setPortalStart]      = useState(null);   // 'register' when arriving from a "Join" button
   const [currentBatchId,   setCurrentBatchId]   = useState(null);
   const [currentReceiptId, setCurrentReceiptId] = useState(null);
 
@@ -137,14 +139,14 @@ function App() {
     clearCustomerSession();
     setUser(null);
     setToken(null);
-    setCurrentView('scanner');
+    setCurrentView('home');
   };
 
   const handleRestaurantLogout = () => {
     clearRestaurantSession();
     setRestaurantName(null);
     announceAuth({ role: 'restaurant', action: 'logout' });
-    setCurrentView('scanner');
+    setCurrentView('home');
   };
 
   const openLoginModal = () => {
@@ -206,6 +208,65 @@ function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+
+  // ── Home page navigation ──
+  const goTo = (view, start = null) => {
+    setPortalStart(start);
+    setCurrentView(view);
+    window.scrollTo({ top: 0 });
+  };
+  const goHome = () => {
+    if (window.location.pathname !== '/' || window.location.search) window.history.replaceState({}, '', '/');
+    setShowSuccessModal(false);
+    goTo('home');
+  };
+
+  const authModal = (
+    showAuthModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 relative">
+              <button
+                onClick={() => setShowAuthModal(false)}
+                className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-2xl"
+              >
+                ×
+              </button>
+
+              <div className="text-center mb-6">
+                <h1 className="text-3xl font-bold text-green-600 mb-2">🌾 Farm Passport</h1>
+                <p className="text-gray-600">Discover the story behind your food</p>
+              </div>
+
+              {authView === 'login' ? (
+                <Login
+                  onLogin={handleLogin}
+                  onSwitchToRegister={() => setAuthView('register')}
+                />
+              ) : (
+                <Register
+                  onRegister={handleLogin}
+                  onSwitchToLogin={() => setAuthView('login')}
+                />
+              )}
+            </div>
+          </div>
+        )
+  );
+
+  if (currentView === 'home') {
+    return (
+      <>
+        <HomePage
+          onNavigate={(view, start) => (view === 'badges' ? handleViewBadges() : goTo(view, start))}
+          onLogin={openLoginModal}
+          onRegister={openRegisterModal}
+          signedInAs={user ? { label: 'My profile', view: 'badges' } : restaurantName ? { label: restaurantName, view: 'restaurant' } : null}
+        />
+        {authModal}
+      </>
+    );
+  }
+
   return (
 <div className="min-h-screen bg-red-500 p-4 pb-24">      {/* Email verification banner */}
         <div className="max-w-4xl mx-auto">
@@ -213,10 +274,18 @@ function App() {
 
         {/* ── Header / nav bar ── */}
         <div className="text-center mb-6 pt-4">
-          <h1 className="text-4xl font-bold text-green-600 mb-1">🌾 Farm Passport</h1>
+          <h1 className="text-4xl font-bold text-green-600 mb-1">
+            <button onClick={goHome} className="hover:opacity-80 transition" title="Back to the home page">🌾 Farm Passport</button>
+          </h1>
           <p className="text-gray-500 text-sm">Scan produce to discover its story</p>
 
           <div className="mt-3 flex gap-2 justify-center flex-wrap">
+            <button
+              onClick={goHome}
+              className="bg-white text-green-700 px-4 py-1.5 rounded-lg font-semibold hover:bg-green-50 transition text-sm"
+            >
+              🏠 Home
+            </button>
             {currentView !== 'scanner' && (
               <button
                 onClick={handleBackToScanner}
@@ -327,36 +396,7 @@ function App() {
           </div>
         </div>
 
-        {/* ── Auth Modal (Login / Register) ── */}
-        {showAuthModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 relative">
-              <button
-                onClick={() => setShowAuthModal(false)}
-                className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-2xl"
-              >
-                ×
-              </button>
-
-              <div className="text-center mb-6">
-                <h1 className="text-3xl font-bold text-green-600 mb-2">🌾 Farm Passport</h1>
-                <p className="text-gray-600">Discover the story behind your food</p>
-              </div>
-
-              {authView === 'login' ? (
-                <Login
-                  onLogin={handleLogin}
-                  onSwitchToRegister={() => setAuthView('register')}
-                />
-              ) : (
-                <Register
-                  onRegister={handleLogin}
-                  onSwitchToLogin={() => setAuthView('login')}
-                />
-              )}
-            </div>
-          </div>
-        )}
+        {authModal}
 
         {/* ── Success modal (receipt badge claim) ── */}
         {showSuccessModal && successInfo && (
@@ -448,13 +488,15 @@ function App() {
 
         {currentView === 'farmer' && (
           <FarmerPortal
-            onBackToCustomer={() => setCurrentView('scanner')}
+            onBackToCustomer={() => setCurrentView('home')}
+            startOn={portalStart}
           />
         )}
 
         {currentView === 'restaurant' && (
           <RestaurantPortal
             onBack={handleBackToScanner}
+            startOn={portalStart}
           />
         )}
 

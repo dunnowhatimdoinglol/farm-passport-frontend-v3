@@ -17,11 +17,11 @@ const API_BASE = 'https://farm-passport-backend-v3.onrender.com/api';
 const formatQty = (amount, unit) =>
   `${Number(amount).toLocaleString('en-GB')} ${unit || ''}`.trim();
 
-function RestaurantPortal({ onBack }) {
+function RestaurantPortal({ onBack, startOn = null }) {
   // ── Restaurant auth (self-contained, App.jsx doesn't know about this) ──
   const [restaurantUser,  setRestaurantUser]  = useState(null);
   const [restaurantToken, setRestaurantToken] = useState(null);
-  const [authView,        setAuthView]        = useState('login');   // 'login' | 'register'
+  const [authView,        setAuthView]        = useState(startOn === 'register' ? 'register' : 'login');   // 'login' | 'register'
 
   // Restore restaurant session on mount
   useEffect(() => {
