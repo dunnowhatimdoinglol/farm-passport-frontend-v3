@@ -619,7 +619,8 @@ function OrderStock({ authHeader, approved }) {
 
   const STATUS = {
     requested:  ['Waiting for the farm', 'bg-yellow-100 text-yellow-800'],
-    dispatched: ['Dispatched', 'bg-green-100 text-green-700'],
+    dispatched: ['On its way', 'bg-blue-100 text-blue-700'],
+    delivered:  ['Delivered', 'bg-green-100 text-green-700'],
     declined:   ['Declined', 'bg-gray-100 text-gray-600'],
     cancelled:  ['Cancelled', 'bg-gray-100 text-gray-600'],
   };
@@ -701,9 +702,15 @@ function OrderStock({ authHeader, approved }) {
                   )}
                 </div>
                 <div className="text-right space-y-1">
-                  <span className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full ${STATUS[o.status]?.[1] || ''}`}>
-                    {STATUS[o.status]?.[0] || o.status}
-                  </span>
+                  {(() => {
+                    // Once the delivery is confirmed, show "Delivered" instead of "On its way"
+                    const st = o.status === 'dispatched' && o.shipmentStatus === 'delivered' ? 'delivered' : o.status;
+                    return (
+                      <span className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full ${STATUS[st]?.[1] || ''}`}>
+                        {STATUS[st]?.[0] || st}
+                      </span>
+                    );
+                  })()}
                   {o.status === 'dispatched' && (
                     <p className="text-xs text-gray-500">{o.paymentStatus === 'paid' ? '💷 Paid' : 'Payment due'}</p>
                   )}

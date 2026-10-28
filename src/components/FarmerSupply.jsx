@@ -193,7 +193,6 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
               <div>
                 <p className="font-semibold text-gray-800">{o.restaurantName} · {formatQty(o.quantitySent ?? o.quantity, o.unit)} {o.productName}</p>
                 <p className="font-mono text-xs text-gray-500">{o.batchId}{o.shipmentId ? ` · shipment #${o.shipmentId}` : ''}</p>
-                {o.shipmentStatus && <p className="text-xs text-gray-500 mt-1">Shipment: {STATUS_LABEL[o.shipmentStatus] || o.shipmentStatus}</p>}
                 {o.total != null && (
                   <p className="text-xs text-gray-700 mt-1">
                     💷 {o.unitPrice != null && <>{gbp(o.unitPrice)}/{o.unit}</>}
@@ -203,7 +202,8 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                 )}
               </div>
               <div className="text-right space-y-1">
-                <Badge status={o.status} />
+                {/* Once the restaurant confirms, show "Delivered" instead of "Dispatched" */}
+                <Badge status={o.status === 'dispatched' && o.shipmentStatus === 'delivered' ? 'delivered' : o.status} />
                 {o.status === 'dispatched' && (
                   <label className="flex items-center gap-1 text-xs text-gray-600 justify-end cursor-pointer">
                     <input
