@@ -164,11 +164,12 @@ function UserProfile({ authToken, onBack }) {
       
       {/* Profile Card */}
       <div className="bg-white rounded-lg shadow-lg p-6">
-        <div className="flex items-start justify-between mb-6">
-          <div className="flex items-center gap-4">
+        {/* On phones the Edit button drops below the name; side by side on wider screens */}
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
+          <div className="flex items-center gap-4 min-w-0">
             {/* Profile Picture */}
-            <div className="relative">
-              <div className="w-24 h-24 rounded-full overflow-hidden bg-gray-200 flex items-center justify-center">
+            <div className="relative shrink-0">
+              <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden bg-gray-200 flex items-center justify-center">
                 {profile?.profileImageUrl ? (
                   <img 
                     src={profile.profileImageUrl} 
@@ -194,10 +195,10 @@ function UserProfile({ authToken, onBack }) {
             </div>
 
             {/* Name & Bio */}
-            <div>
-              <h2 className="text-2xl font-bold text-gray-800">{displayName}</h2>
+            <div className="min-w-0">
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-800 break-words">{displayName}</h2>
               {profile?.username && (
-                <p className="text-sm text-gray-500">{profile.email}</p>
+                <p className="text-sm text-gray-500 break-all">{profile.email}</p>
               )}
               {profile?.bio && !editMode && (
                 <p className="text-gray-600 mt-2">{profile.bio}</p>
@@ -209,7 +210,7 @@ function UserProfile({ authToken, onBack }) {
           {!editMode && (
             <button
               onClick={() => setEditMode(true)}
-              className="bg-gray-100 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-200 transition font-semibold"
+              className="self-start shrink-0 whitespace-nowrap bg-gray-100 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-200 transition font-semibold"
             >
               ✏️ Edit Profile
             </button>
