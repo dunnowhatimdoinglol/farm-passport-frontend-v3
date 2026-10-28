@@ -207,7 +207,11 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
   // ── Form ──
   const [selectedShipmentId, setSelectedShipmentId] = useState('');
   const [amountPaid,      setAmountPaid]      = useState('');
-  const [quantitySold,    setQuantitySold]    = useState('');   // optional — wholesale stock tracking
+  const [quantitySold,    setQuantitySold]    = useState('');   // custom amount (when no dish is picked)
+  const [dishId,          setDishId]          = useState('');   // '' = type an amount
+  const [servings,        setServings]        = useState('1');
+  const [saveAsDish,      setSaveAsDish]      = useState(false);
+  const [newDishName,     setNewDishName]     = useState('');
   const [submitting,      setSubmitting]      = useState(false);
   const [submitErr,       setSubmitErr]       = useState(null);
 
@@ -216,9 +220,48 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
 
   const selected = stock.find(s => String(s.shipmentId) === String(selectedShipmentId)) || null;
 
+  // ── Dishes: saved portion sizes ("Pheasant pie" uses 0.2 kg) ──
+  const [dishes, setDishes] = useState([]);
+  const [showDishes, setShowDishes] = useState(false);
+  const fetchDishes = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/restaurant/dishes`, authHeader);
+      setDishes(res.data.dishes || []);
+    } catch (err) {
+      console.error('RestaurantPortal dishes:', err);
+    }
+  };
+  useEffect(() => { fetchDishes(); }, []);
+
+  // Only dishes measured in the same unit as the chosen stock
+  const dishOptions = selected ? dishes.filter(d => d.unit === selected.unit) : [];
+  const dish = dishOptions.find(d => String(d.id) === String(dishId)) || null;
+  const usedAmount = dish
+    ? Math.round(dish.portion * (Number(servings) || 0) * 1000) / 1000
+    : (quantitySold === '' ? 0 : Number(quantitySold));
+
+  // When the product changes, pick the dish last used for that product (if still saved)
+  const pickProduct = (shipmentId) => {
+    setSelectedShipmentId(shipmentId);
+    setServings('1');
+    const s = stock.find(x => String(x.shipmentId) === String(shipmentId));
+    let last = '';
+    try { last = localStorage.getItem(`fp_lastDish_${s?.productName}`) || ''; } catch { /* storage unavailable */ }
+    const ok = s && dishes.some(d => String(d.id) === last && d.unit === s.unit);
+    setDishId(ok ? last : '');
+  };
+
   // ── Submit ──
   const handleCreate = async (e) => {
     e.preventDefault();
+    if (!(usedAmount > 0)) {
+      setSubmitErr('Choose a dish or enter how much was used');
+      return;
+    }
+    if (selected && usedAmount > selected.available) {
+      setSubmitErr(`Only ${formatQty(selected.available, selected.unit)} left in this delivery`);
+      return;
+    }
     setSubmitting(true);
     setSubmitErr(null);
 
@@ -226,9 +269,17 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
       const res = await axios.post(`${API_BASE}/restaurant/create-receipt`, {
         shipmentId:     Number(selectedShipmentId),
         amountPaid:     parseFloat(amountPaid),
-        // Only sent when filled in — leaving it empty skips stock tracking
-        quantitySold:   quantitySold === '' ? undefined : parseFloat(quantitySold),
+        quantitySold:   usedAmount,          // always taken off this delivery's stock
+        dishName:       dish ? dish.name : (saveAsDish && newDishName.trim() ? newDishName.trim() : undefined),
+        servings:       dish ? Number(servings) : undefined,
       }, authHeader);   // restaurant name comes from the login on the backend
+
+      // Remember the dish for next time / save a new one
+      try { if (dish) localStorage.setItem(`fp_lastDish_${selected?.productName}`, String(dish.id)); } catch { /* ignore */ }
+      if (!dish && saveAsDish && newDishName.trim() && selected) {
+        axios.post(`${API_BASE}/restaurant/dishes`, { name: newDishName.trim(), portion: usedAmount, unit: selected.unit }, authHeader)
+          .then(fetchDishes).catch(() => {});
+      }
 
       setCreatedReceipt(res.data.receipt || res.data.data || res.data);
     } catch (err) {
@@ -247,6 +298,10 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
     setSelectedShipmentId('');
     setAmountPaid('');
     setQuantitySold('');
+    setDishId('');
+    setServings('1');
+    setSaveAsDish(false);
+    setNewDishName('');
     setSubmitErr(null);
     fetchStock();
   };
@@ -403,7 +458,12 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
               <>
                 <div>
                   <p className="text-xs text-gray-500 uppercase tracking-wide">Quantity Sold</p>
-                  <p className="font-semibold text-gray-800">{formatQty(sold, unit)}</p>
+                  <p className="font-semibold text-gray-800">
+                    {formatQty(sold, unit)}
+                    {createdReceipt.dishName && (
+                      <span className="font-normal text-gray-600"> · {createdReceipt.servings && Number(createdReceipt.servings) !== 1 ? `${Number(createdReceipt.servings)} × ` : ''}{createdReceipt.dishName}</span>
+                    )}
+                  </p>
                 </div>
                 {leftAfter !== undefined && leftAfter !== null && (
                   <div>
@@ -469,7 +529,7 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
               <label className="block text-sm font-semibold text-gray-700 mb-2">Product (from your stock)</label>
               <select
                 value={selectedShipmentId}
-                onChange={(e) => setSelectedShipmentId(e.target.value)}
+                onChange={(e) => pickProduct(e.target.value)}
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white"
                 required
               >
@@ -509,28 +569,71 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
               </div>
             </div>
 
-            {/* Quantity sold — OPTIONAL, for wholesale */}
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">
-                Quantity Sold <span className="font-normal text-gray-400">(optional)</span>
-              </label>
-              <div className="relative">
-                <input
-                  type="number" step="any" min="0"
-                  max={selected ? selected.available : undefined}
-                  value={quantitySold}
-                  onChange={(e) => setQuantitySold(e.target.value)}
-                  placeholder="e.g. 2"
-                  className="w-full pl-4 pr-16 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-                />
-                {selected?.unit && (
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">{selected.unit}</span>
+            {/* What they had — every receipt takes stock off this delivery */}
+            {selected && (
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">What did they have?</label>
+                <select
+                  value={dishId}
+                  onChange={(e) => { setDishId(e.target.value); setServings('1'); }}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white"
+                >
+                  <option value="">✏️ Type an amount</option>
+                  {dishOptions.map(d => (
+                    <option key={d.id} value={d.id}>{d.name} — {formatQty(d.portion, d.unit)} each</option>
+                  ))}
+                </select>
+
+                {dish ? (
+                  <div className="flex items-center gap-2 mt-3">
+                    <span className="text-sm text-gray-600">How many:</span>
+                    <button type="button" onClick={() => setServings(String(Math.max(1, (Number(servings) || 1) - 1)))}
+                      className="w-9 h-9 rounded-lg bg-gray-100 font-bold text-gray-700 hover:bg-gray-200">−</button>
+                    <input type="number" min="1" step="1" value={servings}
+                      onChange={(e) => setServings(e.target.value)}
+                      className="w-16 text-center px-2 py-2 border border-gray-300 rounded-lg" />
+                    <button type="button" onClick={() => setServings(String((Number(servings) || 0) + 1))}
+                      className="w-9 h-9 rounded-lg bg-gray-100 font-bold text-gray-700 hover:bg-gray-200">+</button>
+                  </div>
+                ) : (
+                  <div className="mt-3">
+                    <div className="relative">
+                      <input
+                        type="number" step="any" min="0"
+                        max={selected.available}
+                        value={quantitySold}
+                        onChange={(e) => setQuantitySold(e.target.value)}
+                        placeholder="e.g. 0.25"
+                        className="w-full pl-4 pr-16 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                      />
+                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">{selected.unit}</span>
+                    </div>
+                    <label className="flex items-center gap-2 mt-2 text-sm text-gray-600 cursor-pointer">
+                      <input type="checkbox" checked={saveAsDish} onChange={(e) => setSaveAsDish(e.target.checked)} />
+                      Save this as a dish for next time
+                    </label>
+                    {saveAsDish && (
+                      <input type="text" maxLength={60} value={newDishName}
+                        onChange={(e) => setNewDishName(e.target.value)}
+                        placeholder="Dish name, e.g. Pheasant pie"
+                        className="w-full mt-2 px-4 py-2 border border-gray-300 rounded-lg text-sm" />
+                    )}
+                  </div>
                 )}
+
+                {usedAmount > 0 && (
+                  <p className={`text-sm mt-2 ${usedAmount > selected.available ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
+                    Takes <strong>{formatQty(usedAmount, selected.unit)}</strong> off this delivery
+                    {usedAmount > selected.available
+                      ? ` — only ${formatQty(selected.available, selected.unit)} left`
+                      : ` · ${formatQty(Math.round((selected.available - usedAmount) * 1000) / 1000, selected.unit)} left after`}
+                  </p>
+                )}
+                <p className="text-xs text-gray-400 mt-1">
+                  Recorded on the blockchain, so receipts can never add up to more than you received. A rough portion size is fine.
+                </p>
               </div>
-              <p className="text-xs text-gray-400 mt-1">
-                For wholesale sales — recorded on the blockchain and taken off this delivery's stock. Leave empty for meals.
-              </p>
-            </div>
+            )}
 
             {submitErr && (
               <div className="bg-red-50 border border-red-300 rounded-lg p-3">
@@ -551,6 +654,17 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
           </form>
         )}
       </div>
+
+      {stock.length > 0 && (
+        <div className="bg-white rounded-lg shadow-lg p-6">
+          <button type="button" onClick={() => setShowDishes(!showDishes)}
+            className="w-full flex justify-between items-center text-left">
+            <span className="text-lg font-bold text-gray-800">🍲 Your dishes <span className="text-sm font-normal text-gray-500">({dishes.length})</span></span>
+            <span className="text-sm text-orange-600 font-semibold">{showDishes ? 'Hide' : 'Manage'}</span>
+          </button>
+          {showDishes && <DishManager dishes={dishes} authHeader={authHeader} onChanged={fetchDishes} />}
+        </div>
+      )}
 
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-5">
         <h3 className="text-sm font-bold text-blue-800 mb-2">💡 How this works</h3>
@@ -733,6 +847,74 @@ function OrderStock({ authHeader, approved }) {
 // Deliveries — shipments sent to this restaurant.
 // Confirming what arrived is recorded on-chain as this restaurant.
 // ─────────────────────────────────────────────────────────
+// Save / remove dishes (portion sizes) used when making receipts
+function DishManager({ dishes, authHeader, onChanged }) {
+  const [name,    setName]    = useState('');
+  const [portion, setPortion] = useState('');
+  const [unit,    setUnit]    = useState('kg');
+  const [busy,    setBusy]    = useState(false);
+  const [error,   setError]   = useState(null);
+
+  const add = async (e) => {
+    e.preventDefault();
+    setBusy(true); setError(null);
+    try {
+      await axios.post(`${API_BASE}/restaurant/dishes`, { name, portion: Number(portion), unit }, authHeader);
+      setName(''); setPortion('');
+      onChanged?.();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Could not save the dish');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (d) => {
+    if (!window.confirm(`Remove "${d.name}"?`)) return;
+    try {
+      await axios.delete(`${API_BASE}/restaurant/dishes/${d.id}`, authHeader);
+      onChanged?.();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Could not remove the dish');
+    }
+  };
+
+  return (
+    <div className="mt-4">
+      <p className="text-sm text-gray-500 mb-3">
+        Roughly how much of the product goes into one serving. Saving the same name again updates the portion.
+      </p>
+      {dishes.length === 0 ? (
+        <p className="text-sm text-gray-400 mb-3">No dishes saved yet.</p>
+      ) : (
+        <ul className="divide-y divide-gray-100 mb-4">
+          {dishes.map(d => (
+            <li key={d.id} className="py-2 flex justify-between items-center gap-3">
+              <span className="text-sm text-gray-800"><strong>{d.name}</strong> — {formatQty(d.portion, d.unit)} each</span>
+              <button type="button" onClick={() => remove(d)} className="text-xs text-red-600 hover:underline">Remove</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form onSubmit={add} className="flex gap-2 flex-wrap items-center">
+        <input type="text" required maxLength={60} value={name} onChange={(e) => setName(e.target.value)}
+          placeholder="Dish name" className="flex-1 min-w-[10rem] px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+        <input type="number" required step="any" min="0.001" value={portion} onChange={(e) => setPortion(e.target.value)}
+          placeholder="0.2" className="w-24 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+        <select value={unit} onChange={(e) => setUnit(e.target.value)}
+          className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
+          {['kg', 'units', 'litres', 'dozen'].map(u => <option key={u} value={u}>{u}</option>)}
+        </select>
+        <button type="submit" disabled={busy}
+          className="bg-orange-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-orange-700 disabled:bg-gray-400">
+          {busy ? 'Saving…' : '+ Add dish'}
+        </button>
+      </form>
+      {error && <p className="text-sm text-red-600 mt-2">⚠️ {error}</p>}
+    </div>
+  );
+}
+
 function Deliveries({ authHeader, approved, onReceived }) {
   const [shipments, setShipments] = useState([]);
   const [loading,   setLoading]   = useState(true);
