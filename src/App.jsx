@@ -17,6 +17,7 @@ import VerifyEmail from './components/VerifyEmail';
 import Leaderboard from './components/Leaderboard';
 import SupplyChainPage from './components/SupplyChainPage';
 import AdminPage from './components/AdminPage';
+import { parseFarmLink } from './components/walletHelpers';
 import {
   AUTH_EVENT, announceAuth,
   clearCustomerSession, clearRestaurantSession, readRestaurantSession
@@ -93,6 +94,16 @@ function App() {
     
     if (token) {
       setCurrentView('verify-email');
+    } else if (/^\/(r|b)\//.test(window.location.pathname)) {
+      // Opened from a QR code or NFC tag: /r/<receiptId> or /b/<batchId>
+      const link = parseFarmLink(window.location.pathname);
+      if (link?.type === 'receipt') {
+        setCurrentReceiptId(link.id);
+        setCurrentView('receipt');
+      } else if (link?.type === 'batch') {
+        setCurrentBatchId(link.id);
+        setCurrentView('farm');
+      }
     } else if (window.location.pathname.startsWith('/supply') || window.location.pathname.startsWith('/checkpoint')) {
       // Opened from an NFC sticker: /supply?shipment=12  (old /checkpoint?batch=... links still work)
       setCurrentView('supply');
@@ -148,6 +159,12 @@ function App() {
 
   // ── Scanner callback ──
   const handleScanComplete = (payload) => {
+    // New QR codes hold a full link (…/r/<id> or …/b/<id>); old ones hold just the ID
+    const raw = typeof payload === 'string' ? payload : (payload?.receiptId || payload?.batchId);
+    const link = parseFarmLink(raw);
+    if (link && raw && /\/(r|b)\//.test(raw)) {
+      payload = link.type === 'receipt' ? { type: 'receipt', receiptId: link.id } : { batchId: link.id };
+    }
     if (payload && payload.type === 'receipt') {
       setCurrentReceiptId(payload.receiptId);
       setCurrentBatchId(null);

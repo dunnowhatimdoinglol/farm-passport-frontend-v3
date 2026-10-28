@@ -4,7 +4,8 @@ import { QRCodeSVG } from 'qrcode.react';
 import RestaurantLogin    from './RestaurantLogin';
 import RestaurantRegister from './RestaurantRegister';
 import { AUTH_EVENT, announceAuth, clearCustomerSession } from '../authSession';
-import { shortWhen } from './walletHelpers';
+import { shortWhen, receiptLink } from './walletHelpers';
+import NfcShare from './NfcShare';
 import { PhotoPicker, DeliveryPhotoButton } from './DeliveryPhoto';
 
 // Prices are only shown to the farm and the restaurant — never on the customer journey
@@ -373,8 +374,9 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
 
         <div className="bg-white rounded-lg shadow-lg p-8">
           <div className="flex flex-col items-center">
-            <QRCodeSVG value={receiptId} size={260} includeMargin={true} bgColor="#ffffff" fgColor="#1f2937" />
+            <QRCodeSVG value={receiptLink(receiptId)} size={260} includeMargin={true} bgColor="#ffffff" fgColor="#1f2937" />
             <p className="font-mono text-sm text-gray-600 mt-4 break-all">{receiptId}</p>
+            <NfcShare url={receiptLink(receiptId)} />
           </div>
         </div>
 
@@ -995,8 +997,9 @@ function ReceiptHistory({ restaurantToken, onLogout }) {
 
           {openQR === r.receiptId && (
             <div className="mt-4 flex flex-col items-center border-t border-gray-100 pt-4">
-              <QRCodeSVG value={r.receiptId} size={200} includeMargin={true} bgColor="#ffffff" fgColor="#1f2937" />
+              <QRCodeSVG value={receiptLink(r.receiptId)} size={200} includeMargin={true} bgColor="#ffffff" fgColor="#1f2937" />
               <p className="text-xs text-gray-400 mt-2">Right-click the QR → Save image to reprint</p>
+              <NfcShare url={receiptLink(r.receiptId)} compact />
             </div>
           )}
         </div>

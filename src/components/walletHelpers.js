@@ -135,3 +135,35 @@ export async function syncTransaction(txHash) {
   }
   return false;   // it's on-chain either way; can be re-synced from the Admin page
 }
+
+// ─────────────────────────────────────────────
+// Links for QR codes & NFC tags
+//   /r/<receiptId>  → a receipt (claim the badge)
+//   /b/<batchId>    → a batch's farm story
+// Set VITE_SITE_URL on Render if the site ever moves to its own domain (e.g. https://fpass.uk)
+// ─────────────────────────────────────────────
+export const SITE_URL = (import.meta.env?.VITE_SITE_URL || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/$/, '');
+export const receiptLink = (id) => `${SITE_URL}/r/${encodeURIComponent(id)}`;
+export const batchLink   = (id) => `${SITE_URL}/b/${encodeURIComponent(id)}`;
+
+// Turn anything scanned / opened into { type: 'receipt' | 'batch', id }.
+// Understands the new links AND the old QR codes that hold just the ID.
+export function parseFarmLink(text) {
+  const t = String(text || '').trim();
+  if (!t) return null;
+  const m = t.match(/\/(r|b)\/([^/?#\s]+)/);           // https://…/r/RECEIPT-… or /b/BATCH-…
+  if (m) {
+    let id = m[2];
+    try { id = decodeURIComponent(id); } catch { /* keep as is */ }
+    return { type: m[1] === 'r' ? 'receipt' : 'batch', id };
+  }
+  if (/^https?:\/\//i.test(t)) return null;             // some other website — not ours
+  return { type: /^RECEIPT-/i.test(t) ? 'receipt' : 'batch', id: t };
+}
+
+// Writing NFC tags from a web page only works in Chrome on Android
+export const canWriteNfc = () => typeof window !== 'undefined' && 'NDEFReader' in window;
+export async function writeNfcUrl(url) {
+  const ndef = new window.NDEFReader();
+  await ndef.write({ records: [{ recordType: 'url', data: url }] }, { overwrite: true });
+}

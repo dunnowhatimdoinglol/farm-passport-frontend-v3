@@ -3,7 +3,8 @@ import axios from 'axios';
 import CreateBatchForm from './CreateBatchForm';
 import { QRCodeSVG } from 'qrcode.react';
 import { FarmerOrders, DispatchForm, FarmerShipments } from './FarmerSupply';
-import { formatQty } from './walletHelpers';
+import { formatQty, batchLink } from './walletHelpers';
+import NfcShare from './NfcShare';
 
 // farmerToken = sign-in token from FarmerPortal (the private key is never sent to the server)
 function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogout }) {
@@ -499,7 +500,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
                     <div className="ml-4">
                       <div className="bg-white p-2 border-2 border-gray-300 rounded-lg">
                         <QRCodeSVG
-                          value={batchId}
+                          value={batchLink(batchId)}
                           size={100}
                           level="H"
                           includeMargin={true}
@@ -596,6 +597,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
                   >
                     📥 Download QR Code for Printing
                   </button>
+                  <NfcShare url={batchLink(batchId)} compact />
                   
                   <p className="text-xs text-gray-500 text-center mt-2">
                     Print this QR code and attach to product packaging
@@ -605,7 +607,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
                   <div className="hidden">
                     <QRCodeSVG
                       id={`qr-download-${batchId}`}
-                      value={batchId}
+                      value={batchLink(batchId)}
                       size={512}
                       level="H"
                       includeMargin={true}

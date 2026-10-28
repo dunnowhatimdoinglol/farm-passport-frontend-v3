@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import axios from 'axios';
 import QRCode from 'qrcode';
+import { batchLink } from './walletHelpers';
+import NfcShare from './NfcShare';
 
 // farmerToken = the farmer's sign-in token (the farm is worked out from it on the server)
 function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuccess, onCancel }) {
@@ -48,7 +50,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
       console.log('Batch created (gasless):', response.data);
 
       // Generate QR code
-      const qrUrl = await QRCode.toDataURL(batchId, {
+      const qrUrl = await QRCode.toDataURL(batchLink(batchId), {
         width: 300,
         margin: 2,
         color: {
@@ -312,6 +314,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
                 >
                   📥 Download QR Code
                 </button>
+                <NfcShare url={batchLink(batchId)} compact />
               </div>
             )}
 
