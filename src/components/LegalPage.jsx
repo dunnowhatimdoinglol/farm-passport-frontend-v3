@@ -119,7 +119,6 @@ function Privacy() {
               <li>Render — hosting for our website and server (United States / EU)</li>
               <li>Brevo — sending our emails (EU)</li>
               <li>Alchemy — connecting our server to the blockchain (United States)</li>
-              <li>Google Fonts — loading the text font on our pages, which shares your IP address with Google (United States)</li>
             </Ul>
           </li>
           <li><strong>Authorities</strong>, if the law requires it.</li>
