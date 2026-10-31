@@ -7,7 +7,10 @@ const EXPLORER = 'https://sepolia.basescan.org';
 const STAGE_ICONS = {
   farm: '🌾', warehouse: '📦', transport: '🚚', dispatched: '🚚', delivered: '✅',
   restaurant: '🍽️', consumer: '🛒', sold: '💷', cancelled: '✖️',
+  arrived: '📦', 'out for delivery': '🚚', rejected: '↩️', returned: '↩️', wasted: '🗑️',
+  recalled: '🚨', 'recall lifted': '✅', 'cold store': '❄️', 'temperature check': '🌡️',
 };
+const fmtDay = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 const iconFor = (stage) => STAGE_ICONS[(stage || '').toLowerCase()] || '📍';
 
 const formatDate = (d) =>
@@ -22,16 +25,16 @@ function StepList({ steps }) {
         <li key={s.key} className="flex gap-4">
           <div className="flex flex-col items-center">
             <div className={`w-10 h-10 rounded-full border-2 flex items-center justify-center text-lg shrink-0 ${
-              s.warn ? 'bg-orange-100 border-orange-400' : s.pending ? 'bg-gray-100 border-gray-300' : 'bg-green-100 border-green-500'}`}>
+              s.alert ? 'bg-red-100 border-red-500' : s.warn ? 'bg-orange-100 border-orange-400' : s.pending ? 'bg-gray-100 border-gray-300' : 'bg-green-100 border-green-500'}`}>
               {s.icon}
             </div>
             {i < steps.length - 1 && <div className="w-0.5 flex-1 bg-green-200 my-1" />}
           </div>
           <div className={`min-w-0 ${i < steps.length - 1 ? 'pb-6' : ''}`}>
             <p className="font-bold text-gray-800">{s.title}</p>
-            {s.subtitle && <p className={`text-sm ${s.warn ? 'text-orange-600 font-semibold' : 'text-gray-600'}`}>{s.subtitle}</p>}
+            {s.subtitle && <p className={`text-sm ${s.alert ? 'text-red-700 font-semibold' : s.warn ? 'text-orange-600 font-semibold' : 'text-gray-600'}`}>{s.subtitle}</p>}
             {s.notes && <p className="text-sm text-gray-500 italic">"{s.notes}"</p>}
-            {s.hasPhoto && <p className="text-xs text-green-700 mt-0.5">📷 Delivery photo on record</p>}
+            {s.hasPhoto && <p className="text-xs text-green-700 mt-0.5">📷 Photo on record</p>}
             <div className="flex flex-wrap gap-x-3 text-xs text-gray-400 mt-1">
               {s.date && <span>{formatDate(s.date)}</span>}
               {s.txHash && (
@@ -60,26 +63,31 @@ function checkpointStep(c, shipment, unit) {
   }
   if (stage === 'delivered') {
     const short = shipment?.shortfall > 0;
+    const refused = shipment?.quantityRejected > 0;
     return {
       ...base,
       title: `Arrived at ${c.recorderName || shipment?.toName || ''}`,
-      subtitle: short ? `Received ${qty(c.quantity, unit)} — ${qty(shipment.shortfall, unit)} less than sent` : `Received ${qty(c.quantity, unit)}`,
+      subtitle: [
+        `Received ${qty(c.quantity, unit)}`,
+        refused ? `${qty(shipment.quantityRejected, unit)} refused` : null,
+        short ? `${qty(shipment.shortfall, unit)} missing` : null,
+      ].filter(Boolean).join(' · '),
       warn: short,
     };
   }
+  if (stage === 'rejected') return { ...base, title: `${qty(c.quantity, unit)} refused on arrival`, subtitle: `sent back by ${c.recorderName || shipment?.toName || ''}`, warn: true };
+  if (stage === 'returned') return { ...base, title: `${qty(c.quantity, unit)} sent back to ${shipment?.toName || 'the sender'}`, subtitle: `by ${c.recorderName || shipment?.fromName || ''}` };
   if (stage === 'sold') return { ...base, title: `Sold by ${c.recorderName || c.location || ''}`, subtitle: qty(c.quantity, unit) };
+  if (stage === 'wasted') return { ...base, title: `Written off by ${c.recorderName || ''}`, subtitle: qty(c.quantity, unit) };
   if (stage === 'cancelled') return { ...base, title: 'Shipment cancelled', subtitle: `${qty(c.quantity, unit)} returned` };
-  // Quick steps from a depot / courier ("Arrived at Bristol Depot", "Out for delivery to …") read best as the title
-  const quick = /^(Arrived at|Out for delivery)/.test(c.notes || '');
-  if (quick) {
-    const [headline, ...rest] = c.notes.split(' — ');
-    return {
-      ...base,
-      icon: headline.startsWith('Out for delivery') ? '🚚' : '📦',
-      title: headline,
-      subtitle: c.recorderName && !headline.includes(c.recorderName) ? `by ${c.recorderName}` : null,
-      notes: rest.join(' — ') || null,
-    };
+  if (stage === 'recalled') return { ...base, title: 'Batch recalled', subtitle: `by ${c.recorderName || 'the farm'}`, alert: true };
+  if (stage === 'recall lifted') return { ...base, title: 'Recall lifted', subtitle: 'confirmed safe' };
+  // Depot / courier steps (recorded in order on-chain)
+  if (stage === 'arrived') {
+    return { ...base, title: `Arrived at ${c.recorderName || c.location || 'the depot'}`, subtitle: c.location && c.location !== c.recorderName ? c.location : null };
+  }
+  if (stage === 'out for delivery') {
+    return { ...base, title: `Out for delivery${shipment?.toName ? ` to ${shipment.toName}` : ''}`, subtitle: c.recorderName ? `from ${c.recorderName}` : null };
   }
   return {
     ...base,
@@ -90,18 +98,18 @@ function checkpointStep(c, shipment, unit) {
 
 // Steps for one shipment (dispatch → handling → delivery), optionally without sales
 function shipmentSteps(shipment, checkpoints, unit, { includeSales = false } = {}) {
-  const mine = checkpoints.filter(c => c.shipmentId === shipment.shipmentId && (includeSales || c.stage !== 'Sold'));
+  const mine = checkpoints.filter(c => c.shipmentId === shipment.shipmentId && (includeSales || (c.stage !== 'Sold' && c.stage !== 'Wasted')));
   const deliveredAt = shipment.deliveredAt ? new Date(shipment.deliveredAt).getTime() : null;
   const carrier = (shipment.carrierAddress || '').toLowerCase();
 
   // Keep the story in order: depot / courier steps before "Arrived at <cafe>",
   // even if some were logged after the delivery was confirmed (those are labelled)
-  const isDelivery = (c) => (c.stage || '').toLowerCase() === 'delivered';
+  const isDelivery = (c) => ['delivered', 'rejected'].includes((c.stage || '').toLowerCase());
   const ordered = [...mine.filter(c => !isDelivery(c)), ...mine.filter(isDelivery)];
 
   const steps = ordered.map(c => {
     const step = checkpointStep(c, shipment, unit);
-    const loggedLate = deliveredAt && !isDelivery(c) && c.stage !== 'Sold' && carrier &&
+    const loggedLate = deliveredAt && !isDelivery(c) && c.stage !== 'Sold' && c.stage !== 'Wasted' && carrier &&
       c.recordedBy === carrier && new Date(c.recordedAt).getTime() > deliveredAt;
     if (loggedLate) {
       step.notes = (step.notes || '').replace(/\s*—?\s*\(logged after delivery\)/, '') || null;
@@ -132,9 +140,10 @@ function shipmentSteps(shipment, checkpoints, unit, { includeSales = false } = {
 function ShipmentCard({ shipment, checkpoints, unit, depth }) {
   const [open, setOpen] = useState(false);
   const [showSales, setShowSales] = useState(false);
-  const sales = checkpoints.filter(c => c.shipmentId === shipment.shipmentId && c.stage === 'Sold');
+  const sales = checkpoints.filter(c => c.shipmentId === shipment.shipmentId && (c.stage === 'Sold' || c.stage === 'Wasted'));
   const summary = [
     `Sent ${qty(shipment.quantitySent, unit)}`,
+    shipment.kind === 'return' ? 'returned' : null,
     shipment.status === 'delivered' ? `received ${qty(shipment.quantityReceived, unit)}` : shipment.status === 'in_transit' ? 'on its way' : 'cancelled',
     sales.length ? `${sales.length} sale${sales.length === 1 ? '' : 's'} · ${qty(shipment.sold, unit)}` : null,
   ].filter(Boolean).join(' · ');
@@ -214,11 +223,15 @@ function JourneyTimeline({ batchId, shipmentId = null, refreshKey = 0 }) {
   const { batch, checkpoints, shipments, summary } = data;
   const unit = batch.unit;
 
-  // ── Origin: registration + whole-batch steps (e.g. "Farm") ──
+  // ── Origin: registration + whole-batch steps (e.g. "Farm", recalls) ──
   const origin = [{
     key: 'registered', icon: '🌾',
     title: batch.farmName ? `Harvested & registered by ${batch.farmName}` : 'Harvested & registered on-chain',
-    subtitle: `${qty(batch.quantity, unit)} of ${batch.productName}`,
+    subtitle: [
+      `${qty(batch.quantity, unit)} of ${batch.productName}`,
+      batch.harvestDate ? `harvested ${fmtDay(batch.harvestDate)}` : null,
+      batch.useBy ? `use by ${fmtDay(batch.useBy)}` : null,
+    ].filter(Boolean).join(' · '),
     date: batch.registeredAt, txHash: batch.creationTxHash,
   }];
   checkpoints.filter(c => !c.shipmentId).forEach(c => origin.push(checkpointStep(c, null, unit)));
@@ -226,6 +239,13 @@ function JourneyTimeline({ batchId, shipmentId = null, refreshKey = 0 }) {
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
       {header}
+      {batch.recalled && (
+        <div className="bg-red-50 border-2 border-red-400 rounded-lg p-4 mb-5">
+          <p className="font-bold text-red-800">🚨 This batch has been recalled</p>
+          {batch.recallReason && <p className="text-sm text-red-700 mt-1">Reason: {batch.recallReason}</p>}
+          <p className="text-sm text-red-700 mt-1">If you still have any of this product, don't eat it — return it to where you bought it.</p>
+        </div>
+      )}
       <div className="space-y-6">
         <section>
           <h4 className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-3">🌱 Origin</h4>

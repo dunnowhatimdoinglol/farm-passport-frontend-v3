@@ -7,6 +7,7 @@ import { AUTH_EVENT, announceAuth, clearCustomerSession } from '../authSession';
 import { shortWhen, receiptLink } from './walletHelpers';
 import NfcShare from './NfcShare';
 import { PhotoPicker, DeliveryPhotoButton } from './DeliveryPhoto';
+import { TermsCheck } from './FarmerSupply';
 
 // Prices are only shown to the farm and the restaurant — never on the customer journey
 const gbp = (v) => (v === null || v === undefined || isNaN(Number(v))) ? null : `£${Number(v).toFixed(2)}`;
@@ -535,8 +536,8 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
               >
                 <option value="">— Choose a product —</option>
                 {stock.map((s) => (
-                  <option key={s.shipmentId} value={s.shipmentId}>
-                    {s.productName || 'Product'} — {s.farmName || 'Farm'} · {formatQty(s.available, s.unit)} left
+                  <option key={s.shipmentId} value={s.shipmentId} disabled={s.recalled}>
+                    {s.recalled ? '🚨 RECALLED — ' : ''}{s.productName || 'Product'} — {s.farmName || 'Farm'} · {formatQty(s.available, s.unit)} left
                   </option>
                 ))}
               </select>
@@ -549,6 +550,12 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
                   <div><span className="text-gray-500">Delivery:</span> <span className="font-semibold text-gray-800">#{selected.shipmentId}</span></div>
                   <div><span className="text-gray-500">Received:</span> <span className="font-semibold text-gray-800">{formatQty(selected.quantityReceived, selected.unit)}</span></div>
                   <div><span className="text-gray-500">Left:</span> <span className="font-semibold text-gray-800">{formatQty(selected.available, selected.unit)}</span></div>
+                  {selected.useBy && (
+                    <div className={`col-span-2 ${new Date(selected.useBy) < new Date() ? 'text-red-600 font-semibold' : ''}`}>
+                      <span className="text-gray-500">Use by:</span> {new Date(selected.useBy).toLocaleDateString('en-GB')}
+                      {new Date(selected.useBy) < new Date() ? ' — this has passed' : ''}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -816,6 +823,7 @@ function OrderStock({ authHeader, approved }) {
                       {' '}= <strong>{gbp(o.total)}</strong>{o.totalIsEstimate ? ' (estimate)' : ''}
                     </p>
                   )}
+                  <TermsCheck order={o} token={(authHeader?.headers?.Authorization || '').replace('Bearer ', '')} />
                 </div>
                 <div className="text-right space-y-1">
                   {(() => {
@@ -919,8 +927,11 @@ function Deliveries({ authHeader, approved, onReceived }) {
   const [shipments, setShipments] = useState([]);
   const [loading,   setLoading]   = useState(true);
   const [qty,       setQty]       = useState({});   // shipmentId → quantity received
+  const [refused,   setRefused]   = useState({});   // shipmentId → quantity turned away at the door
+  const [agree,     setAgree]     = useState({});   // shipmentId → agree to the farm's terms (default yes)
   const [notes,     setNotes]     = useState({});
   const [photos,    setPhotos]    = useState({});   // shipmentId → { file, preview } (proof of delivery)
+  const [action,    setAction]    = useState(null); // { id, kind: 'return' | 'waste', qty, notes }
   const [busyId,    setBusyId]    = useState(null);
   const [error,     setError]     = useState(null);
   const token = (authHeader?.headers?.Authorization || '').replace('Bearer ', '');
@@ -952,7 +963,9 @@ function Deliveries({ authHeader, approved, onReceived }) {
     setError(null);
     try {
       const form = new FormData();
-      form.append('quantityReceived', String(qty[s.shipmentId] ?? s.quantitySent));
+      form.append('quantityReceived', String(acceptedOf(s)));
+      form.append('quantityRejected', String(refused[s.shipmentId] || 0));
+      form.append('acceptTerms', agree[s.shipmentId] === false ? 'false' : 'true');
       form.append('notes', notes[s.shipmentId] || '');
       if (photo) form.append('photo', photo.file, 'delivery.jpg');
       await axios.post(`${API_BASE}/restaurant/shipments/${s.shipmentId}/receive`, form, authHeader);
@@ -966,7 +979,28 @@ function Deliveries({ authHeader, approved, onReceived }) {
     }
   };
 
-  const incoming = shipments.filter(s => s.status === 'in_transit');
+  // Accepted defaults to "everything sent, minus anything refused" until typed over
+  const acceptedOf = (s) => qty[s.shipmentId] ?? Math.max(0, Math.round((s.quantitySent - (Number(refused[s.shipmentId]) || 0)) * 1000) / 1000);
+
+  // Send stock back, or write it off
+  const doAction = async () => {
+    const { id, kind } = action;
+    if (!(Number(action.qty) > 0)) { setError('Enter a quantity'); return; }
+    setBusyId(id);
+    setError(null);
+    try {
+      await axios.post(`${API_BASE}/restaurant/shipments/${id}/${kind}`, { quantity: Number(action.qty), notes: action.notes || '' }, authHeader);
+      setAction(null);
+      await load();
+      onReceived?.();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Something went wrong');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const incoming = shipments.filter(s => s.status === 'in_transit' && s.kind !== 'return');
   const received = shipments.filter(s => s.status === 'delivered');
 
   return (
@@ -999,19 +1033,47 @@ function Deliveries({ authHeader, approved, onReceived }) {
                     </ul>
                   </div>
                 )}
+                {s.recalled && (
+                  <p className="text-xs text-red-700 bg-red-50 border border-red-300 rounded px-2 py-1 mt-2 font-semibold">
+                    🚨 The farm has recalled this batch{s.recallReason ? `: ${s.recallReason}` : ''}. Refuse it at the door, or confirm and send it back.
+                  </p>
+                )}
                 {s.carrierName && !s.carrierSteps?.out && (
                   <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2">
                     ⚠️ {s.carrierName} hasn't marked this as out for delivery yet. You can still confirm it if it has arrived.
                   </p>
                 )}
                 <div className="flex gap-2 mt-3 flex-wrap items-center">
-                  <span className="text-sm text-gray-600">Received:</span>
-                <input type="number" step="any" min="0" max={s.quantitySent}
-                    value={qty[s.shipmentId] ?? s.quantitySent}
+                  <span className="text-sm text-gray-600 w-20">Accepted:</span>
+                  <input type="number" step="any" min="0" max={s.quantitySent}
+                    value={acceptedOf(s)}
                     onChange={(e) => setQty({ ...qty, [s.shipmentId]: e.target.value })}
                     className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
                   <span className="text-sm text-gray-500">{s.unit}</span>
                 </div>
+                <div className="flex gap-2 mt-2 flex-wrap items-center">
+                  <span className="text-sm text-gray-600 w-20">Refused:</span>
+                  <input type="number" step="any" min="0" max={s.quantitySent} placeholder="0"
+                    value={refused[s.shipmentId] || ''}
+                    onChange={(e) => setRefused({ ...refused, [s.shipmentId]: e.target.value })}
+                    className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+                  <span className="text-xs text-gray-500">{s.unit} turned away at the door (goes back to {s.fromName})</span>
+                </div>
+                {s.terms && (
+                  <label className="flex gap-2 items-start mt-3 bg-white border border-gray-200 rounded-lg p-2 text-sm cursor-pointer">
+                    <input type="checkbox" className="mt-1"
+                      checked={agree[s.shipmentId] !== false}
+                      onChange={(e) => setAgree({ ...agree, [s.shipmentId]: e.target.checked })} />
+                    <span>
+                      I agree the order terms
+                      {s.terms.total != null && (
+                        <> — {s.terms.unitPrice != null && <>{gbp(s.terms.unitPrice)}/{s.unit}</>}
+                        {s.terms.deliveryFee ? <> + {gbp(s.terms.deliveryFee)} delivery</> : null} = <strong>{gbp(s.terms.total)}</strong></>
+                      )}
+                      <span className="block text-xs text-gray-500">Your agreement is fingerprinted on the blockchain. Untick if the price isn't what you agreed — the farm will see it wasn't confirmed.</span>
+                    </span>
+                  </label>
+                )}
                 <input type="text" maxLength={200} placeholder="Notes (optional), e.g. 2 crates damaged"
                   value={notes[s.shipmentId] || ''}
                   onChange={(e) => setNotes({ ...notes, [s.shipmentId]: e.target.value })}
@@ -1039,14 +1101,51 @@ function Deliveries({ authHeader, approved, onReceived }) {
           <div className="divide-y divide-gray-100">
             {received.map(s => (
               <div key={s.shipmentId} className="py-3 flex justify-between gap-3 flex-wrap">
-                <div>
-                  <p className="font-semibold text-gray-800">{s.productName} — {s.fromName}</p>
+                <div className="min-w-0">
+                  <p className="font-semibold text-gray-800">{s.productName} — {s.fromName}{s.kind === 'return' ? ' (returned to you)' : ''}</p>
                   <p className="text-xs text-gray-500">
                     #{s.shipmentId} · received {formatQty(s.quantityReceived, s.unit)} of {formatQty(s.quantitySent, s.unit)}
-                    {s.shortfall > 0 && <span className="text-orange-600 font-semibold"> · ⚠️ {formatQty(s.shortfall, s.unit)} short</span>}
+                    {s.quantityRejected > 0 && <> · ↩️ {formatQty(s.quantityRejected, s.unit)} refused</>}
+                    {s.shortfall > 0 && <span className="text-orange-600 font-semibold"> · ⚠️ {formatQty(s.shortfall, s.unit)} missing</span>}
+                    {s.wasted > 0 && <> · 🗑️ {formatQty(s.wasted, s.unit)} written off</>}
                   </p>
+                  {s.useBy && (
+                    <p className={`text-xs ${new Date(s.useBy) < new Date() ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
+                      Use by {new Date(s.useBy).toLocaleDateString('en-GB')}{new Date(s.useBy) < new Date() ? ' — passed' : ''}
+                    </p>
+                  )}
+                  {s.recalled && (
+                    <p className="text-xs text-red-700 font-semibold">🚨 Recalled{s.recallReason ? `: ${s.recallReason}` : ''} — don't use it. Send it back or write it off.</p>
+                  )}
                   {s.deliveryNotes && <p className="text-xs text-gray-600 italic">Your note: "{s.deliveryNotes}"</p>}
                   {s.hasDeliveryPhoto && <DeliveryPhotoButton shipmentId={s.shipmentId} token={token} />}
+                  {s.available > 0 && action?.id !== s.shipmentId && approved && (
+                    <div className="flex gap-3 mt-1">
+                      <button onClick={() => setAction({ id: s.shipmentId, kind: 'return', qty: String(s.available), notes: '' })} className="text-xs text-gray-700 hover:underline">↩️ Send back</button>
+                      <button onClick={() => setAction({ id: s.shipmentId, kind: 'waste', qty: '', notes: '' })} className="text-xs text-gray-700 hover:underline">🗑️ Write off</button>
+                    </div>
+                  )}
+                  {action?.id === s.shipmentId && (
+                    <div className="mt-2 bg-gray-50 border border-gray-200 rounded-lg p-2 space-y-2">
+                      <p className="text-xs font-semibold text-gray-700">{action.kind === 'return' ? `Send back to ${s.fromName}` : 'Write off (gone off, damaged, binned)'}</p>
+                      <div className="flex gap-2 items-center flex-wrap">
+                        <input type="number" step="any" min="0" max={s.available} value={action.qty}
+                          onChange={(e) => setAction({ ...action, qty: e.target.value })}
+                          className="w-24 px-2 py-1 border border-gray-300 rounded text-sm" />
+                        <span className="text-xs text-gray-500">{s.unit}</span>
+                        <input type="text" maxLength={200} placeholder="Reason (optional)" value={action.notes}
+                          onChange={(e) => setAction({ ...action, notes: e.target.value })}
+                          className="flex-1 min-w-[8rem] px-2 py-1 border border-gray-300 rounded text-sm" />
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={doAction} disabled={busyId === s.shipmentId}
+                          className="text-xs bg-gray-800 text-white px-3 py-1.5 rounded hover:bg-gray-900 disabled:bg-gray-400">
+                          {busyId === s.shipmentId ? '⛓️ Recording…' : 'Record on-chain'}
+                        </button>
+                        <button onClick={() => setAction(null)} className="text-xs text-gray-600 hover:underline">Cancel</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <p className={`font-bold text-sm ${s.available > 0 ? 'text-gray-800' : 'text-red-600'}`}>{formatQty(s.available, s.unit)} left</p>
               </div>

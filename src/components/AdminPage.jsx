@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import {
   API_BASE, hasWallet, shortAddr, connectMetaMask, metaMaskSign, walletSignIn,
-  supplyChainWithSigner, sendAndConfirm, walletError, syncTransaction,
+  supplyChainWithSigner, sendAndConfirm, walletError, syncTransaction, BADGES_ABI,
 } from './walletHelpers';
 
 /**
@@ -23,7 +23,7 @@ function AdminPage({ onBack }) {
   // Handler form
   const [hAddress, setHAddress] = useState('');
   const [hName,    setHName]    = useState('');
-  const [hStages,  setHStages]  = useState('Warehouse');
+  const [hStages,  setHStages]  = useState('Cold store');
   const [syncHash, setSyncHash] = useState('');
 
   const auth = { headers: { Authorization: `Bearer ${token}` } };
@@ -84,10 +84,33 @@ function AdminPage({ onBack }) {
     }
   };
 
+  // Badges contract call (MetaMask) — nothing to copy back, so no re-sync
+  const badgesTx = async (id, method, args, okMessage) => {
+    setBusy(id); setError(null); setMessage(null);
+    try {
+      const contract = await supplyChainWithSigner(config.badgesAddress, BADGES_ABI);
+      await contract[method].staticCall(...args);
+      const tx = await contract[method](...args);
+      await tx.wait();
+      setMessage(okMessage);
+      await load();
+    } catch (err) {
+      setError(walletError(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const liftRecall = (b) => {
+    const reason = window.prompt(`Lift the recall on ${b.productName} (${b.batchId})?\n\nReason (shown on the journey):`, 'Tests came back clear');
+    if (reason === null) return;
+    ownerTx(`lift${b.batchId}`, 'liftRecall', [b.batchId, reason.trim()], `Recall lifted on ${b.batchId}`);
+  };
+
   const addHandler = (e) => {
     e.preventDefault();
     const stages = hStages.split(',').map(s => s.trim()).filter(Boolean);
-    ownerTx('handler', 'authorizeHandler', [hAddress.trim(), hName.trim(), stages], `${hName} can now record: ${stages.join(', ') || 'receive & forward only'}`)
+    ownerTx('handler', 'authorizeHandler', [hAddress.trim(), hName.trim(), stages], `${hName} added${stages.length ? ` (extra steps: ${stages.join(', ')})` : ''}`)
       .then((ok) => { if (ok) { setHAddress(''); setHName(''); } });
   };
 
@@ -147,14 +170,41 @@ function AdminPage({ onBack }) {
       {error && <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-red-700 text-sm font-semibold">⚠️ {error}</div>}
       {message && <div className="bg-green-50 border border-green-300 rounded-lg p-3 text-green-700 text-sm font-semibold">✅ {message}</div>}
 
-      {/* Registrar setup */}
-      {!data.backendIsRegistrar && (
+      {/* One-time setup: the backend acts for farms and cafés (it pays the gas) and awards badges */}
+      {(!data.backendIsOperator || !data.backendIsBadgeOperator) && (
         <div className="bg-yellow-50 border-2 border-yellow-400 rounded-lg p-5">
-          <p className="font-bold text-yellow-800">One-time setup: let the backend register approved restaurants</p>
-          <p className="text-sm text-yellow-700 mt-1">This gives the backend wallet ({shortAddr(data.backendWallet)}) the registrar role. It can only create restaurant identities.</p>
-          <div className="mt-3">
-            <Btn id="registrar" onClick={() => ownerTx('registrar', 'setRegistrar', [data.backendWallet, true], 'Backend is now a registrar')}>Make backend a registrar</Btn>
+          <p className="font-bold text-yellow-800">One-time setup: let the backend do its job</p>
+          <p className="text-sm text-yellow-700 mt-1">
+            The backend wallet ({shortAddr(data.backendWallet)}) registers approved farms and cafés, records their actions
+            (paying the gas), and awards badges. It can't add depots, pause, upgrade or lift recalls — only you can.
+          </p>
+          <div className="mt-3 flex gap-2 flex-wrap">
+            {!data.backendIsOperator && (
+              <Btn id="op" onClick={() => ownerTx('op', 'setOperator', [data.backendWallet, true], 'Backend is now an operator on the Traceability contract')}>1. Make backend an operator (Traceability)</Btn>
+            )}
+            {!data.backendIsBadgeOperator && (
+              <Btn id="bop" onClick={() => badgesTx('bop', 'setOperator', [data.backendWallet, true], 'Backend can now award badges')}>2. Make backend an operator (Badges)</Btn>
+            )}
           </div>
+        </div>
+      )}
+
+      {/* Recalled batches */}
+      {data.recalledBatches?.length > 0 && (
+        <div className="bg-red-50 border-2 border-red-300 rounded-lg p-5">
+          <h3 className="font-bold text-red-800 mb-2">🚨 Recalled batches ({data.recalledBatches.length})</h3>
+          <div className="divide-y divide-red-200">
+            {data.recalledBatches.map(b => (
+              <div key={b.batchId} className="py-2 flex justify-between gap-3 flex-wrap">
+                <div className="min-w-0">
+                  <p className="font-semibold text-gray-800">{b.productName} — {b.farmName}</p>
+                  <p className="text-xs text-gray-600">{b.batchId} · {b.reason || 'no reason given'}</p>
+                </div>
+                <Btn id={`lift${b.batchId}`} kind="grey" onClick={() => liftRecall(b)}>Lift recall</Btn>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-red-700 mt-2">Only lift a recall if it was made in error or the food has been confirmed safe.</p>
         </div>
       )}
 
@@ -183,7 +233,7 @@ function AdminPage({ onBack }) {
       {/* Farms */}
       <div className="bg-white rounded-lg shadow-lg p-6">
         <h3 className="text-lg font-bold text-gray-800 mb-1">👨‍🌾 Farms {pendingFarmers.length > 0 && <span className="text-sm text-yellow-700">({pendingFarmers.length} waiting)</span>}</h3>
-        <p className="text-xs text-gray-500 mb-4">Approving registers the farm on the blockchain (the backend pays the gas). Check the CPH number first.</p>
+        <p className="text-xs text-gray-500 mb-4">Approving registers the farm on the blockchain under its farm name only (the backend pays the gas). Check the CPH number first.</p>
         <div className="divide-y divide-gray-100">
           {data.farmers.map(f => (
             <div key={f.address} className="py-3 flex justify-between gap-3 flex-wrap">
@@ -212,7 +262,7 @@ function AdminPage({ onBack }) {
             <div key={p.address} className="py-3 flex justify-between gap-3 flex-wrap">
               <div className="min-w-0">
                 <p className="font-semibold text-gray-800">{p.name} {!p.active && <span className="text-xs text-red-600">(revoked)</span>}</p>
-                <p className="text-xs text-gray-500">Steps: {(p.stages || []).join(', ') || 'receive & forward only'}</p>
+                <p className="text-xs text-gray-500">Extra steps: {(p.stages || []).join(', ') || 'none (Arrived / Out for delivery only)'}</p>
                 <p className="font-mono text-xs text-gray-400">{p.address}</p>
               </div>
               {p.active && (
@@ -228,9 +278,12 @@ function AdminPage({ onBack }) {
             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono" />
           <input value={hName} onChange={(e) => setHName(e.target.value)} required maxLength={100} placeholder="Name, e.g. Bristol Depot"
             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-          <input value={hStages} onChange={(e) => setHStages(e.target.value)} placeholder="Steps, comma-separated, e.g. Warehouse, Transport"
+          <input value={hStages} onChange={(e) => setHStages(e.target.value)} placeholder="Extra steps, comma-separated, e.g. Cold store, Temperature check"
             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-          <p className="text-xs text-gray-500">Updating an existing handler replaces its name and steps. "Dispatched", "Delivered", "Sold" and "Cancelled" are reserved.</p>
+          <p className="text-xs text-gray-500">
+            "Arrived" and "Out for delivery" are always available to a depot carrying a shipment — list any extra steps here (optional).
+            Updating an existing handler replaces its name and steps.
+          </p>
           <button type="submit" disabled={busy !== null}
             className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
             {busy === 'handler' ? '⛓️ Recording…' : 'Save handler'}

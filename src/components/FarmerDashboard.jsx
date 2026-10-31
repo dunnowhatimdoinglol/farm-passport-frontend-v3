@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import CreateBatchForm from './CreateBatchForm';
 import { QRCodeSVG } from 'qrcode.react';
-import { FarmerOrders, DispatchForm, FarmerShipments } from './FarmerSupply';
+import { FarmerOrders, DispatchForm, FarmerShipments, FarmerReturns } from './FarmerSupply';
 import { formatQty, batchLink } from './walletHelpers';
 import NfcShare from './NfcShare';
 
@@ -29,6 +29,9 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
   const [resendingEmail, setResendingEmail] = useState(false);
   const [resendSuccess, setResendSuccess] = useState('');
   const [resendError, setResendError] = useState('');
+
+  // Which batch is being recalled (hooks must all sit up here, before any early "return")
+  const [recallBusy, setRecallBusy] = useState(null);
 
   useEffect(() => {
     fetchDashboardData();
@@ -174,6 +177,33 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
   const { farmer, batches } = farmerData;
   const approved = farmer.approvalStatus === 'approved';
   const refreshAll = () => setRefreshTrigger(prev => prev + 1);
+
+  // Recall a batch (food safety): no more dispatches or sales; cafés holding it are warned
+  const recallBatch = async (batchId, productName) => {
+    const reason = window.prompt(
+      `Recall ${productName} (${batchId})?\n\nThis is recorded on the blockchain. It stops any more dispatches and sales from this batch, ` +
+      `and every café holding it is warned.\n\nReason (shown to cafés and customers):`
+    );
+    if (reason === null) return;
+    if (!reason.trim()) { window.alert('Please give a reason for the recall.'); return; }
+    setRecallBusy(batchId);
+    try {
+      const res = await axios.post(
+        `https://farm-passport-backend-v3.onrender.com/api/farmer/batches/${encodeURIComponent(batchId)}/recall`,
+        { reason: reason.trim() },
+        { headers: { Authorization: `Bearer ${farmerToken}` } }
+      );
+      const holders = res.data.holders || [];
+      window.alert(holders.length
+        ? `Recalled. These businesses are holding stock from this batch and have been warned in the app:\n\n• ${holders.join('\n• ')}\n\nPlease contact them directly too.`
+        : 'Recalled. Nobody is holding stock from this batch right now.');
+      refreshAll();
+    } catch (err) {
+      window.alert(err.response?.data?.error || 'Could not recall the batch');
+    } finally {
+      setRecallBusy(null);
+    }
+  };
 
   // Save (or clear) the default price per unit for a batch — only the farm & restaurants see it
   const saveBatchPrice = async (batchId) => {
@@ -387,6 +417,9 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
       {/* Shipments sent */}
       <FarmerShipments farmerToken={farmerToken} refreshKey={refreshTrigger} onChanged={refreshAll} />
 
+      {/* Returns coming back to the farm (only shows when there are some) */}
+      <FarmerReturns farmerToken={farmerToken} refreshKey={refreshTrigger} onChanged={refreshAll} />
+
       {/* Create Batch Button / Form */}
       {!showCreateBatch ? (
         <button
@@ -474,6 +507,17 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
                         ID: {batchId}
                       </p>
                       
+                      {(batch.harvestDate || batch.useBy) && (
+                        <p className="text-sm text-gray-600">
+                          {batch.harvestDate && <>Harvested {new Date(batch.harvestDate).toLocaleDateString('en-GB')}</>}
+                          {batch.useBy && (
+                            <span className={new Date(batch.useBy) < new Date() ? 'text-red-600 font-semibold' : ''}>
+                              {batch.harvestDate ? ' · ' : ''}Use by {new Date(batch.useBy).toLocaleDateString('en-GB')}
+                              {new Date(batch.useBy) < new Date() ? ' (passed)' : ''}
+                            </span>
+                          )}
+                        </p>
+                      )}
                       <p className="text-sm text-gray-600 mb-2">
                         Created: {new Date(timestamp).toLocaleDateString('en-US', {
                           year: 'numeric',
@@ -513,6 +557,13 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
                       </p>
                     </div>
                   </div>
+
+                  {batch.recalled && (
+                    <div className="mt-3 bg-red-50 border border-red-300 rounded-lg p-3">
+                      <p className="text-sm font-bold text-red-800">🚨 Recalled{batch.recallReason ? `: ${batch.recallReason}` : ''}</p>
+                      <p className="text-xs text-red-700 mt-1">No more dispatches or sales from this batch. If it was a mistake, ask the Farm Passport admin to lift the recall.</p>
+                    </div>
+                  )}
 
                   {/* Stats Row */}
                   <div className="mt-3 pt-3 border-t flex gap-4 text-sm flex-wrap items-center">
@@ -571,7 +622,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
                       )}
                       {priceError[batchId] && <span className="text-xs text-red-600 ml-1">{priceError[batchId]}</span>}
                     </div>
-                    {approved && Number(batch.quantityRemaining ?? batch.quantity) > 0 && dispatchBatchId !== batchId && (
+                    {approved && !batch.recalled && Number(batch.quantityRemaining ?? batch.quantity) > 0 && dispatchBatchId !== batchId && (
                       <button
                         onClick={() => setDispatchBatchId(batchId)}
                         className="ml-auto text-green-700 font-semibold hover:underline"
@@ -598,6 +649,15 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
                     📥 Download QR Code for Printing
                   </button>
                   <NfcShare url={batchLink(batchId)} compact />
+                  {approved && !batch.recalled && (
+                    <button
+                      onClick={() => recallBatch(batchId, productName)}
+                      disabled={recallBusy === batchId}
+                      className="mt-3 w-full text-sm font-semibold text-red-700 border border-red-300 py-2 rounded-lg hover:bg-red-50 disabled:opacity-50"
+                    >
+                      {recallBusy === batchId ? '⛓️ Recording recall…' : '🚨 Recall this batch'}
+                    </button>
+                  )}
                   
                   <p className="text-xs text-gray-500 text-center mt-2">
                     Print this QR code and attach to product packaging

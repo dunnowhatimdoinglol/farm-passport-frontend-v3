@@ -18,6 +18,7 @@ import Leaderboard from './components/Leaderboard';
 import SupplyChainPage from './components/SupplyChainPage';
 import AdminPage from './components/AdminPage';
 import HomePage from './components/HomePage';
+import LegalPage from './components/LegalPage';
 import { parseFarmLink } from './components/walletHelpers';
 import {
   AUTH_EVENT, announceAuth,
@@ -111,6 +112,10 @@ function App() {
       setCurrentView('supply');
     } else if (window.location.pathname.startsWith('/admin')) {
       setCurrentView('admin');
+    } else if (window.location.pathname.startsWith('/privacy')) {
+      setCurrentView('privacy');
+    } else if (window.location.pathname.startsWith('/terms')) {
+      setCurrentView('terms');
     }
   }, []);
 
@@ -215,6 +220,12 @@ function App() {
     setCurrentView(view);
     window.scrollTo({ top: 0 });
   };
+  // Privacy policy / Terms of use — get their own links (/privacy, /terms) so they can be shared
+  const openLegal = (doc) => {
+    window.history.replaceState({}, '', `/${doc}`);
+    setShowAuthModal(false);
+    goTo(doc);
+  };
   const goHome = () => {
     if (window.location.pathname !== '/' || window.location.search) window.history.replaceState({}, '', '/');
     setShowSuccessModal(false);
@@ -253,11 +264,19 @@ function App() {
         )
   );
 
+  if (currentView === 'privacy' || currentView === 'terms') {
+    return <LegalPage doc={currentView} onBack={goHome} onSwitch={openLegal} />;
+  }
+
   if (currentView === 'home') {
     return (
       <>
         <HomePage
-          onNavigate={(view, start) => (view === 'badges' ? handleViewBadges() : goTo(view, start))}
+          onNavigate={(view, start) => (
+            view === 'badges' ? handleViewBadges()
+            : view === 'privacy' || view === 'terms' ? openLegal(view)
+            : goTo(view, start)
+          )}
           onLogin={openLoginModal}
           onRegister={openRegisterModal}
           signedInAs={user ? { label: 'My profile', view: 'badges' } : restaurantName ? { label: restaurantName, view: 'restaurant' } : null}
@@ -514,6 +533,13 @@ function App() {
     onBack={handleBackToScanner}
   />
 )}
+
+        {/* ── Footer: legal links ── */}
+        <div className="text-center text-xs text-gray-500 mt-10 space-x-3">
+          <button onClick={() => openLegal('privacy')} className="hover:underline">Privacy policy</button>
+          <span>·</span>
+          <button onClick={() => openLegal('terms')} className="hover:underline">Terms of use</button>
+        </div>
 
       </div>
     </div>

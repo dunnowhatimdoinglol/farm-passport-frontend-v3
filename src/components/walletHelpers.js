@@ -15,18 +15,35 @@ export const BASE_SEPOLIA = {
   blockExplorerUrls: [EXPLORER],
 };
 
-// Only the contract functions the browser calls directly (handlers in MetaMask, admin)
+// Only the contract functions the browser calls directly (depots in MetaMask, the admin)
 export const SUPPLY_CHAIN_ABI = [
-  'function confirmReceipt(address _onBehalfOf, uint256 _shipmentId, uint256 _quantityReceived, string _notes)',
-  'function forward(address _onBehalfOf, uint256 _parentId, address _to, uint256 _quantity, string _notes) returns (uint256)',
+  'function confirmReceipt(address _onBehalfOf, uint256 _shipmentId, uint256 _received, uint256 _rejected, bytes32 _photo, bytes32 _orderHash, string _notes)',
+  'function forward(address _onBehalfOf, uint256 _parentId, address _to, uint256 _quantity, address _carrier, bytes32 _orderHash, string _notes) returns (uint256)',
+  'function returnGoods(address _onBehalfOf, uint256 _shipmentId, uint256 _quantity, address _carrier, string _notes) returns (uint256)',
   'function cancel(address _onBehalfOf, uint256 _shipmentId, string _notes)',
-  'function addCheckpoint(address _onBehalfOf, string _batchId, uint256 _shipmentId, string _stage, string _location, string _notes)',
+  'function carrierArrived(address _onBehalfOf, uint256 _shipmentId, string _location, string _notes, bytes32 _photo)',
+  'function carrierOutForDelivery(address _onBehalfOf, uint256 _shipmentId, string _notes, bytes32 _photo)',
+  'function addCheckpoint(address _onBehalfOf, string _batchId, uint256 _shipmentId, string _stage, string _location, string _notes, bytes32 _evidence)',
   'function authorizeHandler(address _who, string _name, string[] _stages)',
   'function revokeParticipant(address _who)',
-  'function setRegistrar(address _who, bool _allowed)',
+  'function setOperator(address _who, bool _allowed)',
+  'function liftRecall(string _batchId, string _reason)',
   'function pause()',
   'function unpause()',
+  'error EnforcedPause()',
+  'error ExpectedPause()',
+  'error OwnableUnauthorizedAccount(address account)',
 ];
+// The badges contract: the admin only ever needs to make the backend an operator
+export const BADGES_ABI = [
+  'function setOperator(address who, bool allowed)',
+  'function operators(address) view returns (bool)',
+  'error OwnableUnauthorizedAccount(address account)',
+];
+const CUSTOM_ERRORS = {
+  EnforcedPause: 'Farm Passport is paused right now — please try again later.',
+  OwnableUnauthorizedAccount: 'Only the contract owner wallet can do this.',
+};
 
 export const hasWallet = () => typeof window !== 'undefined' && !!window.ethereum;
 export const shortAddr = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '');
@@ -68,12 +85,12 @@ export async function connectMetaMask() {
   return accounts[0];
 }
 
-/** Supply-chain contract connected to the MetaMask signer. */
-export async function supplyChainWithSigner(contractAddress) {
+/** Traceability contract (or, with abi = BADGES_ABI, the badges contract) connected to the MetaMask signer. */
+export async function supplyChainWithSigner(contractAddress, abi = SUPPLY_CHAIN_ABI) {
   await ensureBaseSepolia();
   const provider = new ethers.BrowserProvider(window.ethereum);
   const signer = await provider.getSigner();
-  return new ethers.Contract(contractAddress, SUPPLY_CHAIN_ABI, signer);
+  return new ethers.Contract(contractAddress, abi, signer);
 }
 
 /**
@@ -100,6 +117,7 @@ export async function metaMaskSign(address, message) {
 /** Turn a wallet/contract error into a short readable message. */
 export function walletError(err) {
   if (err?.code === 'ACTION_REJECTED' || err?.code === 4001) return 'Cancelled in MetaMask.';
+  if (err?.revert?.name) return CUSTOM_ERRORS[err.revert.name] || err.revert.name;
   const reason = err?.reason || err?.shortMessage || err?.info?.error?.message || err?.response?.data?.error || err?.message || '';
   if (/insufficient funds/i.test(reason)) return 'This wallet needs a little Base Sepolia ETH to pay for gas.';
   return reason.replace(/^execution reverted:\s*/i, '').replace(/^"|"$/g, '') || 'Something went wrong.';

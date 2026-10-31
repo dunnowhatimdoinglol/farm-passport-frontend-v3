@@ -209,7 +209,7 @@ function SupplyChainPage({ onBack }) {
                         </p>
                         {s.status === 'delivered' && (
                           <p className={`text-xs ${s.shortfall > 0 ? 'text-orange-600 font-semibold' : 'text-gray-500'}`}>
-                            Received {formatQty(s.quantityReceived, s.unit)}{s.shortfall > 0 ? ` · ⚠️ ${formatQty(s.shortfall, s.unit)} short` : ''}
+                            Received {formatQty(s.quantityReceived, s.unit)}{s.quantityRejected > 0 ? ` · ${formatQty(s.quantityRejected, s.unit)} refused` : ''}{s.shortfall > 0 ? ` · ⚠️ ${formatQty(s.shortfall, s.unit)} missing` : ''}
                             {s.deliveryNotes ? ` · "${s.deliveryNotes}"` : ''}
                           </p>
                         )}
@@ -262,8 +262,9 @@ function SupplyChainPage({ onBack }) {
 // One shipment: receive it, send part of it on, or record a handling step
 // ─────────────────────────────────────────────
 function ShipmentPanel({ title, shipment: s, account, who, canAct, config, participants, onDone, compact }) {
-  const [mode,   setMode]   = useState(null);     // 'receive' | 'forward' | 'step'
+  const [mode,   setMode]   = useState(null);     // 'receive' | 'forward' | 'return' | 'step'
   const [qty,    setQty]    = useState('');
+  const [refused, setRefused] = useState('');     // receive: refused at the door (goes back to the sender)
   const [to,     setTo]     = useState('');
   const [stage,  setStage]  = useState('');
   const [where,  setWhere]  = useState('');
@@ -280,7 +281,7 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
   const stages = who?.stages || [];
   const busy = ['signing', 'mining', 'saving'].includes(status);
 
-  // Quick steps a depot / courier records on a shipment it's carrying (written at the start of the note)
+  // The two steps a depot / courier records on a shipment it's carrying — in order, once each (enforced on-chain)
   const PRESETS = {
     arrived: `Arrived at ${who?.name || 'depot'}`,
     out:     `Out for delivery to ${s.toName}`,
@@ -295,7 +296,7 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
   const late = carried && s.status === 'delivered' && !!nextQuick;
 
   const open = (m, presetKey = null) => {
-    setMode(m); setError(null); setTxHash(null); setStatus('idle'); setNotes('');
+    setMode(m); setError(null); setTxHash(null); setStatus('idle'); setNotes(''); setRefused('');
     setPreset(presetKey);
     setQty(m === 'receive' ? String(s.quantitySent) : '');
     setStage(presetKey === 'out' && stages.includes('Transport') ? 'Transport' : (stages[0] || ''));
@@ -307,10 +308,18 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
     try {
       const contract = await supplyChainWithSigner(config.contractAddress);
       let result;
+      const Z = ethers.ZeroAddress, ZH = ethers.ZeroHash;
       if (mode === 'receive') {
-        result = await sendAndConfirm(contract, 'confirmReceipt', [ethers.ZeroAddress, s.shipmentId, toScaled(qty), notes.trim()], setStatus);
+        result = await sendAndConfirm(contract, 'confirmReceipt',
+          [Z, s.shipmentId, toScaled(qty), toScaled(refused || 0), ZH, ZH, notes.trim()], setStatus);
       } else if (mode === 'forward') {
-        result = await sendAndConfirm(contract, 'forward', [ethers.ZeroAddress, s.shipmentId, to, toScaled(qty), notes.trim()], setStatus);
+        result = await sendAndConfirm(contract, 'forward', [Z, s.shipmentId, to, toScaled(qty), Z, ZH, notes.trim()], setStatus);
+      } else if (mode === 'return') {
+        result = await sendAndConfirm(contract, 'returnGoods', [Z, s.shipmentId, toScaled(qty), Z, notes.trim()], setStatus);
+      } else if (preset === 'arrived') {
+        result = await sendAndConfirm(contract, 'carrierArrived', [Z, s.shipmentId, where.trim(), notes.trim(), ZH], setStatus);
+      } else if (preset === 'out') {
+        result = await sendAndConfirm(contract, 'carrierOutForDelivery', [Z, s.shipmentId, notes.trim(), ZH], setStatus);
       } else {
         // Catch accidental double taps: same wallet + stage on this shipment in the last 10 minutes
         try {
@@ -320,10 +329,7 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
             Date.now() - new Date(c.recordedAt).getTime() < 10 * 60 * 1000);
           if (recent && !window.confirm(`You already recorded "${stage}" on this shipment in the last 10 minutes. Record another?`)) return;
         } catch (_) {}
-        const fullNotes = (preset
-          ? [PRESETS[preset], notes.trim(), late ? '(logged after delivery)' : ''].filter(Boolean).join(' — ')
-          : notes.trim()).slice(0, 280);
-        result = await sendAndConfirm(contract, 'addCheckpoint', [ethers.ZeroAddress, s.batchId, s.shipmentId, stage, where.trim(), fullNotes], setStatus);
+        result = await sendAndConfirm(contract, 'addCheckpoint', [Z, s.batchId, s.shipmentId, stage, where.trim(), notes.trim().slice(0, 280), ZH], setStatus);
       }
       setTxHash(result.hash);
       setUnsynced(!result.synced);
@@ -349,10 +355,15 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
       <p className="text-sm text-gray-600">{s.fromName} → {s.toName}{s.carrierName ? ` (via ${s.carrierName})` : ''} · {STATUS_TEXT[s.status] || s.status}</p>
       {s.status === 'delivered' && (
         <p className="text-sm text-gray-600">
-          Received {formatQty(s.quantityReceived, s.unit)}{s.shortfall > 0 ? ` (⚠️ ${formatQty(s.shortfall, s.unit)} short)` : ''} · {formatQty(s.available, s.unit)} left
+          Received {formatQty(s.quantityReceived, s.unit)}{s.quantityRejected > 0 ? ` · ${formatQty(s.quantityRejected, s.unit)} refused` : ''}{s.shortfall > 0 ? ` (⚠️ ${formatQty(s.shortfall, s.unit)} missing)` : ''} · {formatQty(s.available, s.unit)} left
         </p>
       )}
       <p className="font-mono text-xs text-gray-400">{s.batchId}</p>
+      {s.recalled && (
+        <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mt-1 font-semibold">
+          🚨 Recalled by the farm{s.recallReason ? `: ${s.recallReason}` : ''}. Don't send it on — return it or write it off.
+        </p>
+      )}
       {s.dispatchNotes && (
         <p className="text-xs text-gray-600 italic mt-1">{s.fromName}: "{s.dispatchNotes}"</p>
       )}
@@ -385,16 +396,19 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
           {mine && s.status === 'in_transit' && who.role !== 'farmer' && (
             <button onClick={() => open('receive')} className="bg-green-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-green-700">✅ Confirm received</button>
           )}
-          {mine && s.status === 'delivered' && s.available > 0 && (
+          {mine && s.status === 'delivered' && s.available > 0 && !s.recalled && (
             <button onClick={() => open('forward')} className="bg-blue-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-blue-700">🚚 Send some on</button>
           )}
-          {carried && s.status === 'in_transit' && stages.length > 0 && nextQuick === 'arrived' && (
+          {mine && s.status === 'delivered' && s.available > 0 && (
+            <button onClick={() => open('return')} className="bg-white border border-gray-300 text-gray-700 text-sm font-semibold px-3 py-2 rounded-lg hover:bg-gray-50">↩️ Send back to {s.fromName}</button>
+          )}
+          {carried && s.status === 'in_transit' && nextQuick === 'arrived' && (
             <button onClick={() => open('step', 'arrived')} className="bg-teal-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-teal-700">📦 Arrived with us</button>
           )}
-          {carried && s.status === 'in_transit' && stages.length > 0 && nextQuick === 'out' && (
+          {carried && s.status === 'in_transit' && nextQuick === 'out' && (
             <button onClick={() => open('step', 'out')} className="bg-blue-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-blue-700">🚚 Out for delivery</button>
           )}
-          {late && stages.length > 0 && (
+          {late && (
             <>
               <p className="w-full text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
                 ⚠️ {s.toName} confirmed delivery before you logged these steps. Add them now so the journey is complete — they'll show as logged after delivery.
@@ -415,13 +429,22 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
 
       {mode && status !== 'done' && (
         <div className="mt-3 bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2">
-          {(mode === 'receive' || mode === 'forward') && (
+          {(mode === 'receive' || mode === 'forward' || mode === 'return') && (
             <div className="flex gap-2 items-center">
-              <span className="text-sm text-gray-600 w-24">{mode === 'receive' ? 'Received:' : 'Quantity:'}</span>
+              <span className="text-sm text-gray-600 w-24">{mode === 'receive' ? 'Received:' : mode === 'return' ? 'Send back:' : 'Quantity:'}</span>
               <input type="number" step="any" min="0" max={mode === 'receive' ? s.quantitySent : s.available}
                 value={qty} onChange={(e) => setQty(e.target.value)} disabled={busy}
                 className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
               <span className="text-sm text-gray-500">{s.unit}</span>
+            </div>
+          )}
+          {mode === 'receive' && (
+            <div className="flex gap-2 items-center">
+              <span className="text-sm text-gray-600 w-24">Refused:</span>
+              <input type="number" step="any" min="0" max={s.quantitySent} placeholder="0"
+                value={refused} onChange={(e) => setRefused(e.target.value)} disabled={busy}
+                className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+              <span className="text-xs text-gray-500">{s.unit} turned away at the door — goes back to {s.fromName}</span>
             </div>
           )}
           {mode === 'forward' && (
@@ -436,7 +459,11 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
           {mode === 'step' && preset && (
             <p className="text-sm font-semibold text-gray-800">{PRESETS[preset]}</p>
           )}
-          {mode === 'step' && (
+          {mode === 'step' && preset === 'arrived' && (
+            <input type="text" value={where} onChange={(e) => setWhere(e.target.value)} maxLength={100} disabled={busy}
+              placeholder="Location, e.g. Bristol Depot" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+          )}
+          {mode === 'step' && !preset && (
             <>
               {stages.length > 1 ? (
                 <select value={stage} onChange={(e) => setStage(e.target.value)} disabled={busy}
@@ -454,7 +481,7 @@ function ShipmentPanel({ title, shipment: s, account, who, canAct, config, parti
             placeholder={preset ? 'Extra note (optional), e.g. van reg, ETA 10am' : 'Notes (optional)'} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
           {error && <p className="text-sm text-red-600 font-semibold">⚠️ {error}</p>}
           <div className="flex gap-2">
-            <button onClick={run} disabled={busy || (mode === 'forward' && (!to || !qty)) || (mode === 'receive' && qty === '')}
+            <button onClick={run} disabled={busy || (mode === 'forward' && (!to || !qty)) || (mode === 'return' && !qty) || (mode === 'receive' && qty === '')}
               className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
               {status === 'signing' ? '🦊 Confirm in MetaMask…' : status === 'mining' ? '⛓️ Recording…' : status === 'saving' ? '💾 Saving…' : 'Record on-chain'}
             </button>
@@ -495,7 +522,7 @@ function FarmSteps({ batches, preselect, canAct, config, onDone }) {
     setError(null);
     try {
       const contract = await supplyChainWithSigner(config.contractAddress);
-      const result = await sendAndConfirm(contract, 'addCheckpoint', [ethers.ZeroAddress, batchId, 0, 'Farm', where.trim(), notes.trim()], setStatus);
+      const result = await sendAndConfirm(contract, 'addCheckpoint', [ethers.ZeroAddress, batchId, 0, 'Farm', where.trim(), notes.trim(), ethers.ZeroHash], setStatus);
       setTxHash(result.hash);
       setNotes('');
       onDone?.();

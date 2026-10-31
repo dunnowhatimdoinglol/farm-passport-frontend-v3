@@ -12,6 +12,9 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
   const [quantity, setQuantity] = useState('');
   const [unit, setUnit] = useState('kg');
   const [pricePerUnit, setPricePerUnit] = useState('');   // optional, £ — only farm & restaurants see it
+  const today = new Date().toISOString().slice(0, 10);
+  const [harvestDate, setHarvestDate] = useState(today);  // on-chain
+  const [useBy, setUseBy] = useState('');                 // optional, on-chain
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showSuccess, setShowSuccess] = useState(false);
@@ -41,7 +44,9 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
         batchId,
         productType,
         productName,
-        quantity: parseInt(quantity),
+        quantity: Number(quantity),
+        harvestDate: harvestDate || undefined,
+        useBy: useBy || undefined,
         unit,
         pricePerUnit: pricePerUnit === '' ? null : Number(pricePerUnit),
         season: season === 'auto' ? null : season 
@@ -165,7 +170,8 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
               value={quantity}
               onChange={(e) => setQuantity(e.target.value)}
               placeholder="e.g., 50"
-              min="1"
+              step="any"
+              min="0.001"
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
               required
             />
@@ -186,6 +192,34 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
             </select>
           </div>
           </div>
+
+        {/* Dates — recorded on the blockchain */}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Harvest date</label>
+            <input
+              type="date"
+              value={harvestDate}
+              max={today}
+              onChange={(e) => setHarvestDate(e.target.value)}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+            />
+            <p className="text-xs text-gray-500 mt-1">For meat: slaughter / processing date</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Use by <span className="text-gray-400 font-normal">— optional</span>
+            </label>
+            <input
+              type="date"
+              value={useBy}
+              min={harvestDate || today}
+              onChange={(e) => setUseBy(e.target.value)}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+            />
+            <p className="text-xs text-gray-500 mt-1">Cafés and customers will see this</p>
+          </div>
+        </div>
 
         {/* Price field (optional) */}
         <div>
