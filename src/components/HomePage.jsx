@@ -291,16 +291,7 @@ function HomePage({ onNavigate, onLogin, onRegister, signedInAs }) {
   const [copied, setCopied] = useState(false);
   const menuRef = useRef(null);
 
-  // Manrope font, once
-  useEffect(() => {
-    if (document.getElementById('fp-manrope')) return;
-    const l = document.createElement('link');
-    l.id = 'fp-manrope';
-    l.rel = 'stylesheet';
-    l.href = 'https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap';
-    document.head.appendChild(l);
-  }, []);
-
+ 
   // Close the sign-in menu when clicking elsewhere
   useEffect(() => {
     const close = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false); };
