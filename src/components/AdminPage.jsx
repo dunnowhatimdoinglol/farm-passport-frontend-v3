@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import {
   API_BASE, hasWallet, shortAddr, connectMetaMask, metaMaskSign, walletSignIn,
-  supplyChainWithSigner, sendAndConfirm, walletError, syncTransaction, BADGES_ABI,
+  supplyChainWithSigner, sendAndConfirm, walletError, syncTransaction, BADGES_ABI, PROCESSING_ABI,
 } from './walletHelpers';
 
 /**
@@ -25,6 +25,8 @@ function AdminPage({ onBack }) {
   const [hName,    setHName]    = useState('');
   const [hStages,  setHStages]  = useState('Cold store');
   const [syncHash, setSyncHash] = useState('');
+  const [approval, setApproval] = useState({});      // handler address → FSA approval number being typed
+  const [newImpl,  setNewImpl]  = useState('');       // upgrade: new Traceability implementation address
 
   const auth = { headers: { Authorization: `Bearer ${token}` } };
 
@@ -101,6 +103,29 @@ function AdminPage({ onBack }) {
     }
   };
 
+  // Processing contract call (MetaMask) — approve processors, make the backend an operator
+  const processingTx = async (id, method, args, okMessage) => {
+    setBusy(id); setError(null); setMessage(null);
+    try {
+      const contract = await supplyChainWithSigner(data.processingAddress, PROCESSING_ABI);
+      await contract[method].staticCall(...args);
+      const tx = await contract[method](...args);
+      await tx.wait();
+      setMessage(okMessage);
+      await load();
+    } catch (err) {
+      setError(walletError(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const upgradeTraceability = () => {
+    if (!/^0x[0-9a-fA-F]{40}$/.test(newImpl.trim())) { setError('Paste the new implementation address (0x…)'); return; }
+    if (!window.confirm(`Upgrade the Traceability contract to the code at ${newImpl.trim()}?\n\nThe address and all records stay the same. Only do this with code you've compiled and verified.`)) return;
+    ownerTx('upgrade', 'upgradeToAndCall', [newImpl.trim(), '0x'], 'Traceability upgraded').then((ok) => { if (ok) setNewImpl(''); });
+  };
+
   const liftRecall = (b) => {
     const reason = window.prompt(`Lift the recall on ${b.productName} (${b.batchId})?\n\nReason (shown on the journey):`, 'Tests came back clear');
     if (reason === null) return;
@@ -171,7 +196,8 @@ function AdminPage({ onBack }) {
       {message && <div className="bg-green-50 border border-green-300 rounded-lg p-3 text-green-700 text-sm font-semibold">✅ {message}</div>}
 
       {/* One-time setup: the backend acts for farms and cafés (it pays the gas) and awards badges */}
-      {(!data.backendIsOperator || !data.backendIsBadgeOperator) && (
+      {(!data.backendIsOperator || !data.backendIsBadgeOperator
+        || (data.processingAddress && (!data.processingConnected || !data.backendIsProcessingOperator))) && (
         <div className="bg-yellow-50 border-2 border-yellow-400 rounded-lg p-5">
           <p className="font-bold text-yellow-800">One-time setup: let the backend do its job</p>
           <p className="text-sm text-yellow-700 mt-1">
@@ -184,6 +210,14 @@ function AdminPage({ onBack }) {
             )}
             {!data.backendIsBadgeOperator && (
               <Btn id="bop" onClick={() => badgesTx('bop', 'setOperator', [data.backendWallet, true], 'Backend can now award badges')}>2. Make backend an operator (Badges)</Btn>
+            )}
+            {data.processingAddress && !data.processingConnected && (
+              String(data.traceabilityVersion || '').startsWith('4.0')
+                ? <span className="text-xs text-yellow-800 self-center">3. Upgrade Traceability to v4.1 first (box at the bottom), then connect Processing</span>
+                : <Btn id="conn" onClick={() => ownerTx('conn', 'setProcessing', [data.processingAddress], 'Processing connected to Traceability')}>3. Connect Processing to Traceability</Btn>
+            )}
+            {data.processingAddress && !data.backendIsProcessingOperator && (
+              <Btn id="pop" onClick={() => processingTx('pop', 'setOperator', [data.backendWallet, true], 'Backend can now record processing')}>4. Make backend an operator (Processing)</Btn>
             )}
           </div>
         </div>
@@ -264,6 +298,25 @@ function AdminPage({ onBack }) {
                 <p className="font-semibold text-gray-800">{p.name} {!p.active && <span className="text-xs text-red-600">(revoked)</span>}</p>
                 <p className="text-xs text-gray-500">Extra steps: {(p.stages || []).join(', ') || 'none (Arrived / Out for delivery only)'}</p>
                 <p className="font-mono text-xs text-gray-400">{p.address}</p>
+                {data.processingAddress && p.active && (
+                  p.processor?.active ? (
+                    <p className="text-xs text-red-800 font-semibold mt-1">
+                      🔪 Approved slaughterhouse / processor · {p.processor.approvalNumber}{' '}
+                      <button disabled={busy !== null} onClick={() => window.confirm(`Stop ${p.name} recording slaughter and cutting?`) && processingTx(`pr${p.address}`, 'setProcessor', [p.address, '', false], `${p.name} is no longer a processor`)}
+                        className="text-gray-500 font-normal underline ml-1">remove</button>
+                    </p>
+                  ) : (
+                    <div className="flex gap-2 items-center mt-1 flex-wrap">
+                      <input value={approval[p.address] || ''} onChange={(e) => setApproval({ ...approval, [p.address]: e.target.value })} maxLength={64}
+                        placeholder="FSA approval no., e.g. UK 1234" className="px-2 py-1 border border-gray-300 rounded text-xs" />
+                      <Btn id={`pr${p.address}`} kind="grey" onClick={() => (approval[p.address] || '').trim()
+                        ? processingTx(`pr${p.address}`, 'setProcessor', [p.address, approval[p.address].trim(), true], `${p.name} approved as a slaughterhouse / processor`)
+                        : setError('Enter its FSA approval number (check it on the FSA list of approved establishments)')}>
+                        🔪 Approve as abattoir / processor
+                      </Btn>
+                    </div>
+                  )
+                )}
               </div>
               {p.active && (
                 <Btn id={`h${p.address}`} kind="grey" onClick={() => window.confirm(`Revoke ${p.name}?`) && ownerTx(`h${p.address}`, 'revokeParticipant', [p.address], `${p.name} revoked`)}>Revoke</Btn>
@@ -314,6 +367,24 @@ function AdminPage({ onBack }) {
           </button>
         </div>
       </div>
+
+      {/* Upgrades (owner only): swap in new contract code behind the same address */}
+      <details className="bg-white rounded-lg shadow-lg p-6">
+        <summary className="text-lg font-bold text-gray-800 cursor-pointer">⚙️ Contract versions & upgrades</summary>
+        <p className="text-sm text-gray-600 mt-2">
+          Traceability: <strong>v{data.traceabilityVersion || '?'}</strong>
+          {data.processingAddress ? <> · Processing: <span className="font-mono text-xs">{shortAddr(data.processingAddress)}</span> {data.processingConnected ? '✅ connected' : '— not connected'}</> : ' · Processing: not set on the backend (PROCESSING_CONTRACT_ADDRESS)'}
+        </p>
+        <p className="text-xs text-gray-500 mt-3 mb-2">
+          To upgrade Traceability: deploy the new FarmPassportTraceability code in Remix (no proxy), verify it, then paste its address here.
+          The contract address and all records stay the same.
+        </p>
+        <div className="flex gap-2 flex-wrap">
+          <input value={newImpl} onChange={(e) => setNewImpl(e.target.value.trim())} placeholder="New implementation 0x…"
+            className="flex-1 min-w-0 px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono" />
+          <Btn id="upgrade" kind="grey" onClick={upgradeTraceability}>Upgrade Traceability</Btn>
+        </div>
+      </details>
 
       <div className="text-center">
         <button onClick={onBack} className="text-gray-600 hover:underline">← Back</button>

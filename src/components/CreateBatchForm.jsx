@@ -15,14 +15,34 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
   const today = new Date().toISOString().slice(0, 10);
   const [harvestDate, setHarvestDate] = useState(today);  // on-chain
   const [useBy, setUseBy] = useState('');                 // optional, on-chain
+  // Livestock (going to an abattoir): species, ear tag / flock mark, where it was born and reared — all on-chain
+  const [species, setSpecies] = useState('Cattle');
+  const [animalRef, setAnimalRef] = useState('');
+  const [breed, setBreed] = useState('');
+  const [bornIn, setBornIn] = useState('United Kingdom');
+  const [rearedIn, setRearedIn] = useState('United Kingdom');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showSuccess, setShowSuccess] = useState(false);
   const [createdBatch, setCreatedBatch] = useState(null);
   const [qrCodeUrl, setQrCodeUrl] = useState('');
 
-  const productTypes = ['Vegetable', 'Fruit', 'Meat', 'Dairy', 'Grain'];
+  const productTypes = ['Vegetable', 'Fruit', 'Meat', 'Dairy', 'Grain', 'Livestock'];
   const units = ['kg', 'units', 'litres', 'dozen'];
+  const isLivestock = productType === 'Livestock';
+  const SPECIES = { Cattle: 'Cattle', Sheep: 'Sheep / lambs', Pig: 'Pigs', Goat: 'Goats' };
+  const refLabel = species === 'Cattle' ? 'Ear tag number' : species === 'Pig' ? 'Herd mark' : 'Flock mark';
+  const refExample = species === 'Cattle' ? 'e.g. UK 123456 700123' : species === 'Pig' ? 'e.g. AB1234' : 'e.g. UK 0123456';
+
+  const chooseType = (t) => {
+    setProductType(t);
+    if (t === 'Livestock') { setUnit('head'); if (species === 'Cattle') setQuantity('1'); }
+    else if (unit === 'head') setUnit('kg');
+  };
+  const chooseSpecies = (sp) => {
+    setSpecies(sp);
+    if (sp === 'Cattle') setQuantity('1');
+  };
 
   const generateBatchId = () => {
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -46,11 +66,13 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
         productName,
         quantity: Number(quantity),
         harvestDate: harvestDate || undefined,
-        useBy: useBy || undefined,
-        unit,
-        pricePerUnit: pricePerUnit === '' ? null : Number(pricePerUnit),
-        season: season === 'auto' ? null : season 
+        useBy: isLivestock ? undefined : (useBy || undefined),
+        unit: isLivestock ? 'head' : unit,
+        pricePerUnit: isLivestock || pricePerUnit === '' ? null : Number(pricePerUnit),
+        season: season === 'auto' ? null : season,
+        ...(isLivestock ? { species, animalRef, breed: breed || undefined, bornIn, rearedIn } : {})
       }, { headers: { Authorization: `Bearer ${farmerToken}` } });
+      if (response.data.originWarning) window.alert(response.data.originWarning);
 
       console.log('Batch created (gasless):', response.data);
 
@@ -76,7 +98,8 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
       // Reset form
       setBatchId('');
       setProductName('');
-      setQuantity('');
+      setQuantity(isLivestock && species === 'Cattle' ? '1' : '');
+      setAnimalRef('');
 
     } catch (err) {
       console.error('Error creating batch:', err);
@@ -136,15 +159,57 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
           </label>
           <select
             value={productType}
-            onChange={(e) => setProductType(e.target.value)}
+            onChange={(e) => chooseType(e.target.value)}
             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
             required
           >
             {productTypes.map(type => (
-              <option key={type} value={type}>{type}</option>
+              <option key={type} value={type}>{type === 'Livestock' ? 'Livestock (going to an abattoir)' : type}</option>
             ))}
           </select>
         </div>
+
+        {/* Livestock: who the animals are — this goes on the blockchain, so every cut can be traced back */}
+        {isLivestock && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-3">
+            <p className="text-sm font-semibold text-amber-900">🐄 About the animals</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Species *</label>
+                <select value={species} onChange={(e) => chooseSpecies(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white">
+                  {Object.entries(SPECIES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">{refLabel} *</label>
+                <input value={animalRef} onChange={(e) => setAnimalRef(e.target.value)} required placeholder={refExample}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg font-mono" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Born in *</label>
+                <input value={bornIn} onChange={(e) => { setBornIn(e.target.value); if (rearedIn === bornIn) setRearedIn(e.target.value); }} required
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Reared in *</label>
+                <input value={rearedIn} onChange={(e) => setRearedIn(e.target.value)} required
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
+              </div>
+              <div className="col-span-2">
+                <label className="block text-xs font-medium text-gray-700 mb-1">Breed <span className="text-gray-400 font-normal">— optional</span></label>
+                <input value={breed} onChange={(e) => setBreed(e.target.value)} placeholder="e.g. Aberdeen Angus"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
+              </div>
+            </div>
+            <p className="text-xs text-amber-800">
+              {species === 'Cattle'
+                ? 'Cattle are tracked one by one: register each animal as its own batch, with its ear tag.'
+                : 'Animals from the same flock / herd going to slaughter together can be one batch.'}
+              {' '}The ear tag / flock mark and countries are public (they're printed on meat labels by law).
+            </p>
+          </div>
+        )}
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -169,10 +234,11 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
               type="number"
               value={quantity}
               onChange={(e) => setQuantity(e.target.value)}
-              placeholder="e.g., 50"
-              step="any"
-              min="0.001"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              placeholder={isLivestock ? 'Number of animals' : 'e.g., 50'}
+              step={isLivestock ? '1' : 'any'}
+              min={isLivestock ? '1' : '0.001'}
+              disabled={isLivestock && species === 'Cattle'}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent disabled:bg-gray-100"
               required
             />
           </div>
@@ -180,6 +246,9 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Unit *
             </label>
+            {isLivestock ? (
+              <p className="px-4 py-3 border border-gray-200 rounded-lg bg-gray-50 text-gray-700">head</p>
+            ) : (
             <select
               value={unit}
               onChange={(e) => setUnit(e.target.value)}
@@ -190,13 +259,14 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
                 <option key={u} value={u}>{u}</option>
               ))}
             </select>
+            )}
           </div>
           </div>
 
         {/* Dates — recorded on the blockchain */}
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Harvest date</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">{isLivestock ? 'Date of birth' : 'Harvest date'}</label>
             <input
               type="date"
               value={harvestDate}
@@ -204,9 +274,9 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
               onChange={(e) => setHarvestDate(e.target.value)}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
             />
-            <p className="text-xs text-gray-500 mt-1">For meat: slaughter / processing date</p>
+            <p className="text-xs text-gray-500 mt-1">{isLivestock ? 'For a group: the oldest animal\'s, roughly' : 'For meat: slaughter / processing date'}</p>
           </div>
-          <div>
+          {!isLivestock && <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Use by <span className="text-gray-400 font-normal">— optional</span>
             </label>
@@ -218,11 +288,11 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
             />
             <p className="text-xs text-gray-500 mt-1">Cafés and customers will see this</p>
-          </div>
+          </div>}
         </div>
 
-        {/* Price field (optional) */}
-        <div>
+        {/* Price field (optional) — not for live animals */}
+        {!isLivestock && <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
             Price per {unit} (£) <span className="text-gray-400 font-normal">— optional</span>
           </label>
@@ -236,7 +306,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
           />
           <p className="text-xs text-gray-500 mt-1">Restaurants see this when ordering. You can change it later, or per order. Customers never see prices.</p>
-        </div>
+        </div>}
 
         {/* Season field */}
         <div>

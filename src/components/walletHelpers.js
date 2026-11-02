@@ -30,6 +30,11 @@ export const SUPPLY_CHAIN_ABI = [
   'function liftRecall(string _batchId, string _reason)',
   'function pause()',
   'function unpause()',
+  // v4.1: connect the Processing contract, and upgrades (owner only)
+  'function setProcessing(address _processing)',
+  'function processing() view returns (address)',
+  'function version() view returns (string)',
+  'function upgradeToAndCall(address newImplementation, bytes data) payable',
   'error EnforcedPause()',
   'error ExpectedPause()',
   'error OwnableUnauthorizedAccount(address account)',
@@ -39,6 +44,14 @@ export const BADGES_ABI = [
   'function setOperator(address who, bool allowed)',
   'function operators(address) view returns (bool)',
   'error OwnableUnauthorizedAccount(address account)',
+];
+// The Processing contract (abattoirs, cutting plants): the admin approves processors and the backend operator
+export const PROCESSING_ABI = [
+  'function setProcessor(address who, string approvalNumber, bool active)',
+  'function setOperator(address who, bool allowed)',
+  'function operators(address) view returns (bool)',
+  'error OwnableUnauthorizedAccount(address account)',
+  'error EnforcedPause()',
 ];
 const CUSTOM_ERRORS = {
   EnforcedPause: 'Farm Passport is paused right now — please try again later.',

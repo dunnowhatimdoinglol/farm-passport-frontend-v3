@@ -9,7 +9,9 @@ const STAGE_ICONS = {
   restaurant: '🍽️', consumer: '🛒', sold: '💷', cancelled: '✖️',
   arrived: '📦', 'out for delivery': '🚚', rejected: '↩️', returned: '↩️', wasted: '🗑️',
   recalled: '🚨', 'recall lifted': '✅', 'cold store': '❄️', 'temperature check': '🌡️',
+  produced: '🥩', processed: '🔪',
 };
+const SPECIES_ICON = { Cattle: '🐄', Sheep: '🐑', Pig: '🐖', Goat: '🐐' };
 const fmtDay = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 const iconFor = (stage) => STAGE_ICONS[(stage || '').toLowerCase()] || '📍';
 
@@ -80,6 +82,8 @@ function checkpointStep(c, shipment, unit) {
   if (stage === 'sold') return { ...base, title: `Sold by ${c.recorderName || c.location || ''}`, subtitle: qty(c.quantity, unit) };
   if (stage === 'wasted') return { ...base, title: `Written off by ${c.recorderName || ''}`, subtitle: qty(c.quantity, unit) };
   if (stage === 'cancelled') return { ...base, title: 'Shipment cancelled', subtitle: `${qty(c.quantity, unit)} returned` };
+  if (stage === 'processed') return { ...base, title: `Processed at ${c.recorderName || c.location || 'the processor'}`, subtitle: `${qty(c.quantity, unit)} used` };
+  if (stage === 'produced') return { ...base, title: `Made at ${c.recorderName || 'the processor'}`, subtitle: qty(c.quantity, unit) };
   if (stage === 'recalled') return { ...base, title: 'Batch recalled', subtitle: `by ${c.recorderName || 'the farm'}`, alert: true };
   if (stage === 'recall lifted') return { ...base, title: 'Recall lifted', subtitle: 'confirmed safe' };
   // Depot / courier steps (recorded in order on-chain)
@@ -133,6 +137,60 @@ function shipmentSteps(shipment, checkpoints, unit, { includeSales = false } = {
       subtitle: shipment.carrierName ? `with ${shipment.carrierName}` : null,
     });
   }
+  return steps;
+}
+
+// How a made batch was made: "Slaughtered at Dorset Abattoir (UK 1234)", "Cut at …"
+function processStep(m, item, key) {
+  const where = `${m.processorName || 'the processor'}${m.approvalNumber ? ` (${m.approvalNumber})` : ''}`;
+  if (m.kind === 'Slaughter') {
+    const g = m.grading || {};
+    return {
+      key, icon: '🔪', title: `Slaughtered at ${where}`,
+      subtitle: [m.lotRef && `kill no. ${m.lotRef}`, `${qty(item.quantity, item.unit)} carcass`,
+        g.conformation && `grade ${g.conformation}${g.fatClass || ''}`, 'passed inspection'].filter(Boolean).join(' · '),
+      date: m.madeOn, txHash: m.txHash,
+    };
+  }
+  const parents = m.parents || [];
+  const from = parents.length > 1 ? `from ${parents.length} batches` : parents[0] ? `from ${parents[0].productName}${parents[0].lotRef ? ` ${parents[0].lotRef}` : ''}` : null;
+  return {
+    key, icon: '🥩', title: `${m.kind === 'Cutting' ? 'Cut' : m.kind} at ${where}`,
+    subtitle: [`${qty(item.quantity, item.unit)} of ${item.productName}`, from, m.lotRef && `lot ${m.lotRef}`,
+      m.added > 0 && `+ ${qty(m.added, item.unit)} other ingredients`].filter(Boolean).join(' · '),
+    date: m.madeOn, txHash: m.txHash,
+  };
+}
+
+// The chain BEFORE this batch existed: the animal at the farm → abattoir → carcass → …
+function lineageSteps(lineage) {
+  const steps = [];
+  lineage.forEach((l) => {
+    if (!l.madeFrom) {
+      steps.push({
+        key: `lin-${l.batchId}`, icon: SPECIES_ICON[l.species] || '🌾',
+        title: l.species ? `Born and reared at ${l.farmName || 'the farm'}` : `${l.productName} from ${l.farmName || 'the farm'}`,
+        subtitle: [l.breed, l.species && `${l.species === 'Cattle' ? 'ear tag' : l.species === 'Pig' ? 'herd mark' : 'flock mark'} ${l.animalRef || '—'}`,
+          l.bornIn && `born in ${l.bornIn}${l.rearedIn && l.rearedIn !== l.bornIn ? `, reared in ${l.rearedIn}` : ''}`,
+          l.quantity > 1 && l.unit === 'head' ? `${l.quantity} head` : null].filter(Boolean).join(' · '),
+        date: l.registeredAt, txHash: l.txHash,
+      });
+    } else {
+      steps.push(processStep(l.madeFrom, l, `lin-${l.batchId}`));
+    }
+    (l.shipments || []).forEach((sh) => {
+      (l.checkpoints || []).filter(c => c.shipmentId === sh.shipmentId).forEach((c) => {
+        steps.push({ ...checkpointStep(c, sh, l.unit), key: `lin-${l.batchId}-cp-${c.index}` });
+        if ((c.stage || '').toLowerCase() === 'dispatched' && (l.fciShipmentIds || []).includes(sh.shipmentId)) {
+          steps.push({ key: `fci-${sh.shipmentId}`, icon: '📋', title: 'Food Chain Information provided',
+            subtitle: 'health and medicine declarations for the vet (kept private — fingerprint on the blockchain)' });
+        }
+      });
+    });
+    if (l.mixedWith > 0) {
+      steps.push({ key: `mix-${l.batchId}`, icon: '➕', title: `Combined with ${l.mixedWith} other batch${l.mixedWith === 1 ? '' : 'es'}`, subtitle: 'see "Made from" below' });
+    }
+  });
   return steps;
 }
 
@@ -222,9 +280,25 @@ function JourneyTimeline({ batchId, shipmentId = null, refreshKey = 0 }) {
 
   const { batch, checkpoints, shipments, summary } = data;
   const unit = batch.unit;
+  const madeFrom = data.madeFrom || null;
+  const lineage = data.lineage || [];
 
-  // ── Origin: registration + whole-batch steps (e.g. "Farm", recalls) ──
-  const origin = [{
+  // ── Origin: registration (or how it was made) + whole-batch steps (e.g. "Farm", recalls) ──
+  const origin = madeFrom ? [{
+    ...processStep(madeFrom, batch, 'registered'),
+    subtitle: [processStep(madeFrom, batch, 'x').subtitle, batch.useBy ? `use by ${fmtDay(batch.useBy)}` : null].filter(Boolean).join(' · '),
+  }] : batch.species ? [{
+    // Live animals registered by the farm
+    key: 'registered', icon: SPECIES_ICON[batch.species] || '🐄',
+    title: `Born and reared at ${batch.farmName || 'the farm'}`,
+    subtitle: [
+      `${qty(batch.quantity, unit)} · ${batch.productName}`,
+      batch.animalRef && `${batch.species === 'Cattle' ? 'ear tag' : batch.species === 'Pig' ? 'herd mark' : 'flock mark'} ${batch.animalRef}`,
+      batch.bornIn && `born in ${batch.bornIn}${batch.rearedIn && batch.rearedIn !== batch.bornIn ? `, reared in ${batch.rearedIn}` : ''}`,
+      batch.harvestDate ? `born ${fmtDay(batch.harvestDate)}` : null,
+    ].filter(Boolean).join(' · '),
+    date: batch.registeredAt, txHash: batch.creationTxHash,
+  }] : [{
     key: 'registered', icon: '🌾',
     title: batch.farmName ? `Harvested & registered by ${batch.farmName}` : 'Harvested & registered on-chain',
     subtitle: [
@@ -234,7 +308,12 @@ function JourneyTimeline({ batchId, shipmentId = null, refreshKey = 0 }) {
     ].filter(Boolean).join(' · '),
     date: batch.registeredAt, txHash: batch.creationTxHash,
   }];
-  checkpoints.filter(c => !c.shipmentId).forEach(c => origin.push(checkpointStep(c, null, unit)));
+  checkpoints.filter(c => !c.shipmentId && !['produced', 'processed'].includes((c.stage || '').toLowerCase()))
+    .forEach(c => origin.push(checkpointStep(c, null, unit)));
+
+  // Meat label details (beef labelling: born / reared / slaughtered / cut in, with approval numbers)
+  const slaughterhouse = madeFrom?.slaughterhouse || null;
+  const cutPlant = madeFrom && madeFrom.kind !== 'Slaughter' ? madeFrom.approvalNumber : null;
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
@@ -247,9 +326,37 @@ function JourneyTimeline({ batchId, shipmentId = null, refreshKey = 0 }) {
         </div>
       )}
       <div className="space-y-6">
+        {lineage.length > 0 && (
+          <section>
+            <h4 className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-3">{SPECIES_ICON[batch.species] || '🌾'} Where it came from</h4>
+            <StepList steps={lineageSteps(lineage)} />
+          </section>
+        )}
         <section>
-          <h4 className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-3">🌱 Origin</h4>
+          <h4 className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-3">{madeFrom ? '🥩 Made' : '🌱 Origin'}</h4>
           <StepList steps={origin} />
+          {madeFrom?.parents?.length > 1 && (
+            <div className="mt-3 bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm">
+              <p className="font-semibold text-gray-700 mb-1">Made from</p>
+              <ul className="space-y-0.5">
+                {madeFrom.parents.map(p => (
+                  <li key={p.batchId} className="text-gray-600">{qty(p.quantityUsed, p.unit)} {p.productName}{p.lotRef ? ` (${p.lotRef})` : ''} — {p.farmName || 'farm'}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {batch.species && madeFrom && (
+            <div className="mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-900">
+              <p className="font-semibold mb-1">🏷️ Traceability details</p>
+              <p>
+                {batch.bornIn ? `Born in ${batch.bornIn}` : 'Born in several countries'}
+                {batch.rearedIn ? ` · Reared in ${batch.rearedIn}` : ''}
+                {slaughterhouse ? ` · Slaughtered in UK (${slaughterhouse})` : ''}
+                {cutPlant ? ` · Cut in UK (${cutPlant})` : ''}
+                {batch.animalRef ? ` · Ref ${batch.animalRef}` : madeFrom.lotRef ? ` · Ref ${madeFrom.lotRef}` : ''}
+              </p>
+            </div>
+          )}
         </section>
 
         {!full ? (

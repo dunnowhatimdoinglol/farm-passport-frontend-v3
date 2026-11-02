@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { ethers } from 'ethers';
 import JourneyTimeline from './JourneyTimeline';
+import ProcessorPanel from './ProcessorPanel';
 import {
   API_BASE, EXPLORER, hasWallet, shortAddr, toScaled, formatQty, lastStepText, shortWhen,
   connectMetaMask, supplyChainWithSigner, sendAndConfirm, walletError,
@@ -134,6 +135,7 @@ function SupplyChainPage({ onBack }) {
             ) : who.authorized ? (
               <p className="text-sm text-green-700 font-semibold">
                 ✅ {who.name} · {who.role === 'farmer' ? 'farm' : who.role === 'restaurant' ? 'restaurant' : `handler (${handlingStages.join(', ') || 'receive & forward'})`}
+                {who.processor && ` · slaughterhouse / processor ${who.processor.approvalNumber}`}
               </p>
             ) : (
               <p className="text-sm text-red-600 font-semibold">⛔ This wallet isn't registered on the supply chain. Switch wallet in MetaMask.</p>
@@ -161,6 +163,11 @@ function SupplyChainPage({ onBack }) {
         )
       )}
 
+      {/* Abattoirs / cutting plants: animals in, kill sheet, cutting, sending out */}
+      {account && who?.authorized && who.processor && (
+        <ProcessorPanel account={account} participants={participants} />
+      )}
+
       {/* Work for this wallet: arriving → in stock → carrying for others → history */}
       {account && who?.authorized && who.role !== 'farmer' && (() => {
         // Delivered before the depot logged its steps → stays here so they can be caught up
@@ -186,8 +193,9 @@ function SupplyChainPage({ onBack }) {
         );
         return (
           <>
-            {section({ n: 2, title: "Arriving", items: incoming, hint: "Stock sent to you. Confirm how much arrived when it gets here.", empty: "Nothing on its way to you." })}
-            {section({ n: 3, title: "In stock", items: holding, hint: "Stock you've received. Send some on to a business when it leaves.", empty: "Nothing in stock." })}
+            {/* Processors manage arrivals and stock in the panel above */}
+            {!who.processor && section({ n: 2, title: "Arriving", items: incoming, hint: "Stock sent to you. Confirm how much arrived when it gets here.", empty: "Nothing on its way to you." })}
+            {!who.processor && section({ n: 3, title: "In stock", items: holding, hint: "Stock you've received. Send some on to a business when it leaves.", empty: "Nothing in stock." })}
             {who.role === 'handler' && (
               section({ n: 4, title: "Carrying for others", items: carryingNow, hint: "Shipments going to someone else via you. Record each step as you collect, store and hand them over — the receiver confirms delivery. If something was delivered before you logged it, catch up the missed steps here.", empty: "Nothing to carry right now." })
             )}

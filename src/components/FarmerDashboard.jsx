@@ -194,14 +194,36 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
         { headers: { Authorization: `Bearer ${farmerToken}` } }
       );
       const holders = res.data.holders || [];
-      window.alert(holders.length
+      const also = res.data.alsoRecalled ? `\n\n${res.data.alsoRecalled} batch${res.data.alsoRecalled === 1 ? '' : 'es'} made from it (carcasses, cuts…) were recalled too.` : '';
+      window.alert((holders.length
         ? `Recalled. These businesses are holding stock from this batch and have been warned in the app:\n\n• ${holders.join('\n• ')}\n\nPlease contact them directly too.`
-        : 'Recalled. Nobody is holding stock from this batch right now.');
+        : 'Recalled. Nobody is holding stock from this batch right now.') + also);
       refreshAll();
     } catch (err) {
       window.alert(err.response?.data?.error || 'Could not recall the batch');
     } finally {
       setRecallBusy(null);
+    }
+  };
+
+  // Short-date deal: a reduced price cafés see in "Short-date deals" (null = end the deal)
+  const setDeal = async (batch) => {
+    let price = null;
+    if (batch.dealPrice === null || batch.dealPrice === undefined) {
+      const normal = batch.pricePerUnit;
+      const suggested = normal != null ? (Math.round(normal * 0.7 * 100) / 100).toFixed(2) : '';
+      const raw = window.prompt(
+        `Reduced price per ${batch.unit} for ${batch.productName}${normal != null ? ` (normally £${Number(normal).toFixed(2)})` : ''}?\n\nCafés will see it under "Short-date deals".`, suggested);
+      if (raw === null || raw.trim() === '') return;
+      price = Number(raw);
+      if (isNaN(price) || price < 0) { window.alert('Enter a price of 0 or more'); return; }
+    } else if (!window.confirm(`End the deal on ${batch.productName}? It goes back to the normal price.`)) return;
+    try {
+      await axios.put(`https://farm-passport-backend-v3.onrender.com/api/farmer/batches/${encodeURIComponent(batch.batchId)}/deal`,
+        { dealPrice: price }, { headers: { Authorization: `Bearer ${farmerToken}` } });
+      refreshAll();
+    } catch (err) {
+      window.alert(err.response?.data?.error || 'Could not save the deal');
     }
   };
 
@@ -481,6 +503,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
                 if (typeStr.includes('meat')) return '🥩';
                 if (typeStr.includes('dairy')) return '🥛';
                 if (typeStr.includes('grain')) return '🌾';
+                if (typeStr.includes('livestock')) return batch.species === 'Sheep' ? '🐑' : batch.species === 'Pig' ? '🐖' : batch.species === 'Goat' ? '🐐' : '🐄';
                 return '📦';
               };
               
@@ -500,6 +523,12 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
                           <p className="text-xs text-gray-500">
                             {productType} • {quantity} {unit}
                           </p>
+                          {batch.animalRef && (
+                            <p className="text-xs text-amber-800">
+                              {batch.species} · {batch.species === 'Cattle' ? 'ear tag' : 'mark'} <span className="font-mono">{batch.animalRef}</span>
+                              {batch.breed ? ` · ${batch.breed}` : ''} · born in {batch.bornIn}{batch.rearedIn && batch.rearedIn !== batch.bornIn ? `, reared in ${batch.rearedIn}` : ''}
+                            </p>
+                          )}
                         </div>
                       </div>
                       
@@ -579,6 +608,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
                         {formatQty(batch.quantityRemaining ?? batch.quantity, unit)}
                       </span>
                     </div>
+                    {productType !== 'Livestock' && (<>
                     <div className="flex items-center gap-1">
                       <span className="text-gray-500">Price:</span>
                       {priceEdit[batchId] === undefined ? (
@@ -622,12 +652,24 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
                       )}
                       {priceError[batchId] && <span className="text-xs text-red-600 ml-1">{priceError[batchId]}</span>}
                     </div>
+                    {batch.dealPrice != null ? (
+                      <button onClick={() => setDeal(batch)} className="text-xs font-semibold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full hover:bg-amber-200">
+                        🏷️ Deal £{Number(batch.dealPrice).toFixed(2)} — end
+                      </button>
+                    ) : batch.useSoon ? (
+                      <button onClick={() => setDeal(batch)} className="text-xs font-semibold bg-amber-500 text-white px-2 py-0.5 rounded-full hover:bg-amber-600">
+                        ⏰ Use-by soon — make it a deal?
+                      </button>
+                    ) : Number(batch.quantityRemaining ?? batch.quantity) > 0 && !batch.recalled && (
+                      <button onClick={() => setDeal(batch)} className="text-xs text-amber-700 hover:underline">🏷️ deal</button>
+                    )}
+                    </>)}
                     {approved && !batch.recalled && Number(batch.quantityRemaining ?? batch.quantity) > 0 && dispatchBatchId !== batchId && (
                       <button
                         onClick={() => setDispatchBatchId(batchId)}
                         className="ml-auto text-green-700 font-semibold hover:underline"
                       >
-                        🚚 Send to a depot / business
+                        {productType === 'Livestock' ? '🐄 Send to an abattoir' : '🚚 Send to a depot / business'}
                       </button>
                     )}
                   </div>

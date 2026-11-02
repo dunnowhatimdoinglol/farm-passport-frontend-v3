@@ -22,7 +22,7 @@ import LegalPage from './components/LegalPage';
 import { parseFarmLink } from './components/walletHelpers';
 import {
   AUTH_EVENT, announceAuth,
-  clearCustomerSession, clearRestaurantSession, readRestaurantSession
+  clearCustomerSession, clearRestaurantSession, readRestaurantSession, clearFarmerSession
 } from './authSession';
 
 function App() {
@@ -130,8 +130,9 @@ function App() {
 
   // ── Auth handlers ──
   const handleLogin = (userData, jwtToken) => {
-    // Customer signed in → sign the restaurant out
+    // Diner signed in → sign the business accounts (café, farm) out: diner and business accounts are kept separate
     clearRestaurantSession();
+    clearFarmerSession();
     setRestaurantName(null);
     announceAuth({ role: 'customer', action: 'login' });
 
@@ -505,12 +506,24 @@ function App() {
           />
         )}
 
-        {currentView === 'farmer' && (
+        {currentView === 'farmer' && (user ? (
+          // Diner accounts are kept separate from farm accounts
+          <div className="max-w-md mx-auto bg-white rounded-lg shadow-lg p-8 text-center space-y-4">
+            <div className="text-5xl">👨‍🌾</div>
+            <h2 className="text-xl font-bold text-gray-800">You're signed in as a diner</h2>
+            <p className="text-sm text-gray-600">
+              Farm accounts are kept separate from diner accounts. Log out of <strong>{user.email}</strong> to use the Farmer Portal.
+            </p>
+            <button onClick={() => { clearCustomerSession(); setUser(null); setToken(null); announceAuth({ role: 'customer', action: 'logout' }); }}
+              className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold hover:bg-blue-700">Log out and open the Farmer Portal</button>
+            <button onClick={goHome} className="text-gray-600 hover:underline text-sm">← Back</button>
+          </div>
+        ) : (
           <FarmerPortal
             onBackToCustomer={() => setCurrentView('home')}
             startOn={portalStart}
           />
-        )}
+        ))}
 
         {currentView === 'restaurant' && (
           <RestaurantPortal

@@ -50,6 +50,50 @@ export function TermsCheck({ order, token }) {
   );
 }
 
+// ─────────────────────────────────────────────
+// Food Chain Information: the 3 legal declarations a farm makes when sending animals to slaughter.
+// Kept private (only the abattoir and the farm can see it); its fingerprint goes on the blockchain.
+// ─────────────────────────────────────────────
+const FCI_QUESTIONS = [
+  ['noRestrictions', 'My holding is not under movement restrictions for animal disease or public health reasons'],
+  ['withdrawalObserved', 'Withdrawal periods for all veterinary medicines given have been observed'],
+  ['noDisease', 'The animals have not been exposed to any disease or condition that could affect the safety of the meat'],
+];
+
+export function FciFields({ value, onChange, disabled }) {
+  const set = (k, v) => onChange({ ...value, [k]: v });
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-2">
+      <p className="text-sm font-semibold text-amber-900">📋 Food Chain Information (required for slaughter)</p>
+      {FCI_QUESTIONS.map(([k, label]) => (
+        <label key={k} className="flex gap-2 items-start text-sm text-gray-800 cursor-pointer">
+          <input type="checkbox" className="mt-1" checked={!!value[k]} disabled={disabled} onChange={(e) => set(k, e.target.checked)} />
+          <span>{label}</span>
+        </label>
+      ))}
+      <input type="text" maxLength={500} value={value.notes || ''} disabled={disabled} onChange={(e) => set('notes', e.target.value)}
+        placeholder="Medicines given recently, anything the vet should know (optional)"
+        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+      <label className="block text-xs text-gray-600">
+        Photo or PDF of your FCI form / LIS-1 / eAML2 (optional)
+        <input type="file" accept="image/*,application/pdf" disabled={disabled}
+          onChange={(e) => set('file', e.target.files?.[0] || null)} className="block mt-1 text-xs" />
+      </label>
+      <p className="text-xs text-amber-800">Private: only the abattoir and you can read it. A fingerprint goes on the blockchain to prove it was sent and hasn't been changed.</p>
+    </div>
+  );
+}
+
+export const fciComplete = (v) => FCI_QUESTIONS.every(([k]) => v[k]);
+
+export async function sendFci(shipmentId, value, token) {
+  const form = new FormData();
+  FCI_QUESTIONS.forEach(([k]) => form.append(k, value[k] ? 'true' : 'false'));
+  if (value.notes) form.append('notes', value.notes);
+  if (value.file) form.append('file', value.file);
+  return axios.post(`${API_BASE}/farmer/shipments/${shipmentId}/fci`, form, { headers: { Authorization: `Bearer ${token}` } });
+}
+
 function Badge({ status }) {
   return (
     <span className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full ${STATUS_BADGE[status] || 'bg-gray-100 text-gray-600'}`}>
@@ -66,9 +110,8 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
   const [loading, setLoading] = useState(true);
   const [busyId,  setBusyId]  = useState(null);
   const [error,   setError]   = useState(null);
-  const [qty,     setQty]     = useState({});     // orderId → quantity to send
+  const [alloc,   setAlloc]   = useState({});     // orderId → [{ batchId, quantity, unitPrice }] being sent
   const [via,     setVia]     = useState({});     // orderId → depot / courier address ('' = direct)
-  const [price,   setPrice]   = useState({});     // orderId → price per unit (£) for this order
   const [fee,     setFee]     = useState({});     // orderId → delivery charge (£)
   const [carriers, setCarriers] = useState([]);   // registered depots / couriers
   const auth = { headers: { Authorization: `Bearer ${farmerToken}` } };
@@ -83,6 +126,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
     try {
       const res = await axios.get(`${API_BASE}/farmer/orders`, auth);
       setOrders(res.data.orders || []);
+      setAlloc({});
     } catch (err) {
       setError(err.response?.data?.error || 'Could not load orders');
     } finally {
@@ -121,83 +165,73 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
         <p className="text-sm text-gray-500">No orders yet.</p>
       ) : (
         <div className="space-y-3">
-          {open.map(o => (
+          {open.map(o => {
+            // Which batches to send: the app suggests soonest use-by first; the farm can change amounts and prices
+            const plan = alloc[o.id] || (o.suggestion?.allocations || []).map(a => ({ ...a, unitPrice: a.pricePerUnit ?? '' }));
+            const setPlan = (next) => setAlloc({ ...alloc, [o.id]: next });
+            const sendQty = plan.reduce((n, a) => n + (toNum(a.quantity) || 0), 0);
+            const df = toNum(fee[o.id]) || 0;
+            const priced = plan.every(a => toNum(a.unitPrice) !== null);
+            const total = priced ? Math.round((plan.reduce((n, a) => n + (toNum(a.quantity) || 0) * toNum(a.unitPrice), 0) + df) * 100) / 100 : null;
+            const day = (d) => (d ? new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : 'no use-by');
+            return (
             <div key={o.id} className="border-2 border-yellow-300 bg-yellow-50 rounded-lg p-4">
-              <div className="flex justify-between gap-3 flex-wrap">
+              <div className="flex justify-between items-start gap-3 flex-wrap">
                 <div>
                   <p className="font-bold text-gray-800">{o.restaurantName}</p>
                   <p className="text-sm text-gray-700">
-                    wants <strong>{formatQty(o.quantity, o.unit)}</strong> of {o.productName}
+                    wants <strong>{formatQty(o.quantity, o.unit)}</strong> of {o.productName}{o.isDeal ? ' 🏷️ (your short-date deal)' : ''}
                   </p>
-                  <p className="font-mono text-xs text-gray-500">{o.batchId}</p>
+                  {o.neededUntil && <p className="text-xs text-gray-600">Needs to last until {day(o.neededUntil)}</p>}
                   {o.note && <p className="text-sm text-gray-600 italic mt-1">"{o.note}"</p>}
-                  <p className="text-xs text-gray-500 mt-1">
-                    {o.unitPrice != null
-                      ? <>Your listed price: {gbp(o.unitPrice)} per {o.unit}</>
-                      : <>No price set on this batch — add one below</>}
-                  </p>
                 </div>
                 <Badge status={o.status} />
               </div>
-              <div className="flex gap-2 mt-3 flex-wrap items-center">
-                <input
-                  type="number" step="any" min="0.001"
-                  value={qty[o.id] ?? o.quantity}
-                  onChange={(e) => setQty({ ...qty, [o.id]: e.target.value })}
-                  className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                  disabled={busyId === o.id}
-                />
-                <span className="text-sm text-gray-500">{o.unit}</span>
-                <select
-                  value={via[o.id] || ''}
-                  onChange={(e) => setVia({ ...via, [o.id]: e.target.value })}
-                  disabled={busyId === o.id}
-                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
-                >
+
+              <div className="mt-3 bg-white border border-yellow-200 rounded-lg p-3">
+                <p className="text-xs font-semibold text-gray-700 mb-2">Send from (soonest use-by first):</p>
+                {plan.length === 0 && <p className="text-sm text-red-600">Nothing left that matches this order.</p>}
+                {plan.map((a, i) => (
+                  <div key={a.batchId} className="flex gap-2 items-center flex-wrap text-sm mb-1">
+                    <span className="font-mono text-xs text-gray-600 w-40 truncate" title={a.batchId}>{a.batchId}</span>
+                    <span className="text-xs text-gray-500 w-24">use by {day(a.useBy)}</span>
+                    <input type="number" step="any" min="0" max={a.remaining} value={a.quantity}
+                      onChange={(e) => setPlan(plan.map((x, j) => (j === i ? { ...x, quantity: e.target.value } : x)))}
+                      className="w-20 px-2 py-1 border border-gray-300 rounded" disabled={busyId === o.id} />
+                    <span className="text-gray-500">{o.unit}</span>
+                    <span className="text-gray-500 ml-1">£</span>
+                    <input type="number" step="0.01" min="0" value={a.unitPrice}
+                      onChange={(e) => setPlan(plan.map((x, j) => (j === i ? { ...x, unitPrice: e.target.value } : x)))}
+                      placeholder="price" className="w-20 px-2 py-1 border border-gray-300 rounded" disabled={busyId === o.id} />
+                    <span className="text-xs text-gray-500">/{o.unit}</span>
+                    {plan.length > 1 && <button type="button" onClick={() => setPlan(plan.filter((_, j) => j !== i))} className="text-xs text-red-600">✕</button>}
+                  </div>
+                ))}
+                {o.suggestion?.shortBy > 0 && <p className="text-xs text-amber-700 mt-1">⚠️ {formatQty(o.suggestion.shortBy, o.unit)} short — you can send part of the order.</p>}
+                {plan.length > 1 && <p className="text-xs text-gray-500 mt-1">Goes as {plan.length} deliveries, one per batch, each recorded on-chain.</p>}
+              </div>
+
+              <div className="flex gap-2 mt-2 flex-wrap items-center text-sm">
+                <select value={via[o.id] || ''} onChange={(e) => setVia({ ...via, [o.id]: e.target.value })} disabled={busyId === o.id}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
                   <option value="">Direct (own delivery)</option>
                   {carriers.map(c => <option key={c.address} value={c.address}>via {c.name}</option>)}
                 </select>
+                <label className="text-gray-600 ml-2">🚚 Delivery £</label>
+                <input type="number" step="0.01" min="0" value={fee[o.id] ?? ''} onChange={(e) => setFee({ ...fee, [o.id]: e.target.value })}
+                  placeholder="0.00" className="w-24 px-3 py-2 border border-gray-300 rounded-lg" disabled={busyId === o.id} />
+                <span className="ml-2 font-semibold text-gray-800">
+                  {formatQty(Math.round(sendQty * 1000) / 1000, o.unit)} · {total != null ? <>Total {gbp(total)}</> : <span className="text-gray-400 font-normal">set prices to see the total</span>}
+                </span>
               </div>
-              {(() => {
-                const q  = toNum(qty[o.id] ?? o.quantity) || 0;
-                const up = toNum(price[o.id] ?? o.unitPrice);
-                const df = toNum(fee[o.id]) || 0;
-                const total = up != null ? Math.round((q * up + df) * 100) / 100 : null;
-                return (
-                  <div className="flex gap-2 mt-2 flex-wrap items-center text-sm">
-                    <label className="text-gray-600">£ per {o.unit}</label>
-                    <input
-                      type="number" step="0.01" min="0"
-                      value={price[o.id] ?? (o.unitPrice ?? '')}
-                      onChange={(e) => setPrice({ ...price, [o.id]: e.target.value })}
-                      placeholder="0.00"
-                      className="w-24 px-3 py-2 border border-gray-300 rounded-lg"
-                      disabled={busyId === o.id}
-                    />
-                    <label className="text-gray-600 ml-2">🚚 Delivery £</label>
-                    <input
-                      type="number" step="0.01" min="0"
-                      value={fee[o.id] ?? ''}
-                      onChange={(e) => setFee({ ...fee, [o.id]: e.target.value })}
-                      placeholder="0.00"
-                      className="w-24 px-3 py-2 border border-gray-300 rounded-lg"
-                      disabled={busyId === o.id}
-                    />
-                    <span className="ml-2 font-semibold text-gray-800">
-                      {total != null ? <>Total: {gbp(total)}</> : <span className="text-gray-400 font-normal">Total shows once a price is set</span>}
-                    </span>
-                  </div>
-                );
-              })()}
               <div className="flex gap-2 mt-3 flex-wrap items-center">
                 <button
                   onClick={() => act(o, 'dispatch', {
-                    quantity: qty[o.id] ?? o.quantity,
+                    allocations: plan.map(a => ({ batchId: a.batchId, quantity: toNum(a.quantity), unitPrice: toNum(a.unitPrice) ?? undefined })),
                     via: via[o.id] || undefined,
-                    unitPrice: toNum(price[o.id] ?? o.unitPrice) ?? undefined,
                     deliveryFee: toNum(fee[o.id]) ?? undefined,
                   })}
-                  disabled={busyId === o.id || !approved}
+                  disabled={busyId === o.id || !approved || !plan.length || !(sendQty > 0)}
                   className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400"
                 >
                   {busyId === o.id ? '⛓️ Recording…' : '🚚 Dispatch'}
@@ -214,13 +248,16 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                 </button>
               </div>
             </div>
-          ))}
+            );
+          })}
 
           {done.map(o => (
-            <div key={o.id} className="border border-gray-200 rounded-lg p-4 flex justify-between gap-3 flex-wrap">
+            <div key={o.id} className="border border-gray-200 rounded-lg p-4 flex justify-between items-start gap-3 flex-wrap">
               <div>
                 <p className="font-semibold text-gray-800">{o.restaurantName} · {formatQty(o.quantitySent ?? o.quantity, o.unit)} {o.productName}</p>
-                <p className="font-mono text-xs text-gray-500">{o.batchId}{o.shipmentId ? ` · shipment #${o.shipmentId}` : ''}</p>
+                <p className="font-mono text-xs text-gray-500">
+                  {o.dispatches?.length ? o.dispatches.map(d => `${d.batchId} (#${d.shipmentId})`).join(' + ') : `${o.batchId || ''}${o.shipmentId ? ` · shipment #${o.shipmentId}` : ''}`}
+                </p>
                 {o.total != null && (
                   <p className="text-xs text-gray-700 mt-1">
                     💷 {o.unitPrice != null && <>{gbp(o.unitPrice)}/{o.unit}</>}
@@ -272,18 +309,36 @@ export function DispatchForm({ farmerToken, batch, onDone, onCancel }) {
   }, []);
 
   const remaining = Number(batch.quantityRemaining ?? batch.quantity);
+  // Live animals only go to approved abattoirs, with Food Chain Information
+  const isLivestock = batch.productType === 'Livestock';
+  const [fci, setFci] = useState({});
+  const [sentId, setSentId] = useState(null);       // dispatched, but the FCI still needs sending (retry)
+  const choices = isLivestock ? participants.filter(p => p.processorApproval) : participants;
 
   const submit = async (e) => {
     e.preventDefault();
+    if (isLivestock && !fciComplete(fci)) {
+      setError('Tick all three Food Chain Information declarations. If you can’t, speak to the abattoir before sending.');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      await axios.post(`${API_BASE}/farmer/dispatch`,
-        { batchId: batch.batchId, to, quantity, notes, via: via || undefined },
-        { headers: { Authorization: `Bearer ${farmerToken}` } });
+      let shipmentId = sentId;
+      if (!shipmentId) {
+        const res = await axios.post(`${API_BASE}/farmer/dispatch`,
+          { batchId: batch.batchId, to, quantity, notes, via: via || undefined },
+          { headers: { Authorization: `Bearer ${farmerToken}` } });
+        shipmentId = res.data.shipmentId;
+      }
+      if (isLivestock) {
+        setSentId(shipmentId);
+        await sendFci(shipmentId, fci, farmerToken);
+      }
       onDone?.();
     } catch (err) {
-      setError(err.response?.data?.error || 'Could not dispatch');
+      setError((sentId || isLivestock ? 'The animals are on their way, but the Food Chain Information didn’t send: ' : '')
+        + (err.response?.data?.error || 'Could not dispatch'));
     } finally {
       setBusy(false);
     }
@@ -291,14 +346,21 @@ export function DispatchForm({ farmerToken, batch, onDone, onCancel }) {
 
   return (
     <form onSubmit={submit} className="mt-3 bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
-      <p className="text-sm font-semibold text-gray-700">🚚 Send part of this batch · {formatQty(remaining, batch.unit)} still at the farm</p>
-      <select value={to} onChange={(e) => setTo(e.target.value)} required
+      <p className="text-sm font-semibold text-gray-700">
+        {isLivestock ? '🐄 Send to an abattoir' : '🚚 Send part of this batch'} · {formatQty(remaining, batch.unit)} still at the farm
+      </p>
+      <select value={to} onChange={(e) => setTo(e.target.value)} required disabled={!!sentId}
         className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm">
-        <option value="">— Send to —</option>
-        {participants.map(p => (
-          <option key={p.address} value={p.address}>{p.name} ({p.role === 'restaurant' ? 'restaurant' : 'depot / handler'})</option>
+        <option value="">{isLivestock ? '— Choose the abattoir —' : '— Send to —'}</option>
+        {choices.map(p => (
+          <option key={p.address} value={p.address}>
+            {p.name} ({p.processorApproval ? `abattoir / processor · ${p.processorApproval}` : p.role === 'restaurant' ? 'restaurant' : 'depot / handler'})
+          </option>
         ))}
       </select>
+      {isLivestock && choices.length === 0 && (
+        <p className="text-xs text-red-600">No abattoirs are approved on Farm Passport yet — ask the admin to add yours.</p>
+      )}
       <select value={via} onChange={(e) => setVia(e.target.value)}
         className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm">
         <option value="">Direct (own delivery)</option>
@@ -313,13 +375,14 @@ export function DispatchForm({ farmerToken, batch, onDone, onCancel }) {
         <span className="text-sm text-gray-500">{batch.unit}</span>
       </div>
       <input type="text" value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={280}
-        placeholder="Notes (optional), e.g. 20 crates, chilled"
+        placeholder={isLivestock ? 'Notes (optional), e.g. haulier, trailer reg' : 'Notes (optional), e.g. 20 crates, chilled'}
         className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+      {isLivestock && <FciFields value={fci} onChange={setFci} disabled={busy} />}
       {error && <p className="text-sm text-red-600">⚠️ {error}</p>}
       <div className="flex gap-2">
         <button type="submit" disabled={busy}
           className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
-          {busy ? '⛓️ Recording…' : 'Dispatch'}
+          {busy ? '⛓️ Recording…' : sentId ? 'Send the FCI again' : isLivestock ? 'Send to abattoir' : 'Dispatch'}
         </button>
         <button type="button" onClick={onCancel} className="text-sm text-gray-600 hover:underline">Cancel</button>
       </div>
@@ -334,6 +397,22 @@ export function FarmerShipments({ farmerToken, refreshKey = 0, onChanged }) {
   const [shipments, setShipments] = useState([]);
   const [busyId,    setBusyId]    = useState(null);
   const [error,     setError]     = useState(null);
+  const [fciFor,    setFciFor]    = useState(null);   // shipment whose FCI form is open
+  const [fci,       setFci]       = useState({});
+
+  const submitFci = async (s) => {
+    if (!fciComplete(fci)) { setError('Tick all three declarations'); return; }
+    setBusyId(s.shipmentId); setError(null);
+    try {
+      await sendFci(s.shipmentId, fci, farmerToken);
+      setFciFor(null); setFci({});
+      await load();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Could not send the Food Chain Information');
+    } finally {
+      setBusyId(null);
+    }
+  };
   const auth = { headers: { Authorization: `Bearer ${farmerToken}` } };
 
   const load = () => axios.get(`${API_BASE}/farmer/shipments`, auth)
@@ -392,6 +471,21 @@ export function FarmerShipments({ farmerToken, refreshKey = 0, onChanged }) {
                 <p className="text-xs text-gray-600 italic mt-1">{s.toName}: "{s.deliveryNotes}"</p>
               )}
               {s.hasDeliveryPhoto && <DeliveryPhotoButton shipmentId={s.shipmentId} token={farmerToken} />}
+              {s.productType === 'Livestock' && (s.fciProvided
+                ? <p className="text-xs text-green-700 mt-1">📋 Food Chain Information sent</p>
+                : fciFor === s.shipmentId ? (
+                  <div className="mt-2 space-y-2">
+                    <FciFields value={fci} onChange={setFci} disabled={busyId === s.shipmentId} />
+                    <button onClick={() => submitFci(s)} disabled={busyId === s.shipmentId}
+                      className="text-xs bg-amber-600 text-white px-3 py-1.5 rounded hover:bg-amber-700 disabled:bg-gray-400">
+                      {busyId === s.shipmentId ? 'Sending…' : 'Send Food Chain Information'}
+                    </button>
+                  </div>
+                ) : (
+                  <button onClick={() => { setFciFor(s.shipmentId); setFci({}); }} className="text-xs text-amber-700 font-semibold hover:underline mt-1">
+                    ⚠️ Food Chain Information not sent — send it now
+                  </button>
+                ))}
             </div>
             <div className="text-right space-y-1">
               <Badge status={s.status} />
@@ -413,11 +507,14 @@ export function FarmerShipments({ farmerToken, refreshKey = 0, onChanged }) {
 }
 
 // ─────────────────────────────────────────────
-// Returns coming back to the farm (refused later, unwanted or recalled stock)
+// Coming in to the farm: returns, and boxed meat back from the abattoir (private kill).
+// Stock received can be sent on to cafés / depots.
 // ─────────────────────────────────────────────
 export function FarmerReturns({ farmerToken, refreshKey = 0, onChanged }) {
   const [shipments, setShipments] = useState([]);
+  const [participants, setParticipants] = useState([]);
   const [qty,    setQty]    = useState({});
+  const [send,   setSend]   = useState(null);   // { id, to, quantity, via, notes } — the "send on" form
   const [busyId, setBusyId] = useState(null);
   const [error,  setError]  = useState(null);
   const auth = { headers: { Authorization: `Bearer ${farmerToken}` } };
@@ -426,6 +523,9 @@ export function FarmerReturns({ farmerToken, refreshKey = 0, onChanged }) {
     .then(res => setShipments(res.data.shipments || []))
     .catch(() => {});
   useEffect(() => { load(); }, [refreshKey]);
+  useEffect(() => {
+    axios.get(`${API_BASE}/participants`).then(r => setParticipants(r.data.participants || [])).catch(() => {});
+  }, []);
 
   const receive = async (s) => {
     setBusyId(s.shipmentId);
@@ -443,19 +543,38 @@ export function FarmerReturns({ farmerToken, refreshKey = 0, onChanged }) {
     }
   };
 
+  const sendOn = async () => {
+    if (!send.to || !(Number(send.quantity) > 0)) { setError('Choose who to send it to and how much'); return; }
+    setBusyId(send.id);
+    setError(null);
+    try {
+      await axios.post(`${API_BASE}/farmer/shipments/${send.id}/forward`,
+        { to: send.to, quantity: Number(send.quantity), via: send.via || undefined, notes: send.notes || '' }, auth);
+      setSend(null);
+      await load();
+      onChanged?.();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Could not send it on');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const incoming = shipments.filter(s => s.status === 'in_transit');
-  const received = shipments.filter(s => s.status === 'delivered').slice(0, 10);
+  const inStock = shipments.filter(s => s.status === 'delivered' && s.available > 0);
+  const done = shipments.filter(s => s.status === 'delivered' && !(s.available > 0)).slice(0, 10);
   if (shipments.length === 0) return null;
+  const fromLabel = (s) => (s.kind === 'return' ? 'back from' : 'from');
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-      <h3 className="text-xl font-bold text-gray-800 mb-1">↩️ Returns {incoming.length > 0 && <span className="text-sm bg-yellow-400 text-yellow-900 rounded-full px-2 py-0.5 ml-1">{incoming.length} coming back</span>}</h3>
-      <p className="text-sm text-gray-500 mb-4">Stock a business is sending back to you. Confirm how much arrived.</p>
+      <h3 className="text-xl font-bold text-gray-800 mb-1">📥 Coming in {incoming.length > 0 && <span className="text-sm bg-yellow-400 text-yellow-900 rounded-full px-2 py-0.5 ml-1">{incoming.length} on the way</span>}</h3>
+      <p className="text-sm text-gray-500 mb-4">Returns, and boxed meat back from the abattoir. Confirm how much arrived, then send it on to cafés.</p>
       {error && <p className="text-sm text-red-600 mb-3">⚠️ {error}</p>}
       <div className="space-y-3">
         {incoming.map(s => (
           <div key={s.shipmentId} className="border-2 border-yellow-300 bg-yellow-50 rounded-lg p-4">
-            <p className="font-bold text-gray-800">{formatQty(s.quantitySent, s.unit)} {s.productName} from {s.fromName}</p>
+            <p className="font-bold text-gray-800">{formatQty(s.quantitySent, s.unit)} {s.productName} {fromLabel(s)} {s.fromName}</p>
             {s.dispatchNotes && <p className="text-sm text-gray-600 italic">"{s.dispatchNotes}"</p>}
             {s.recalled && <p className="text-xs text-red-700 font-semibold">🚨 Recalled batch</p>}
             <div className="flex gap-2 mt-3 flex-wrap items-center">
@@ -467,14 +586,61 @@ export function FarmerReturns({ farmerToken, refreshKey = 0, onChanged }) {
               <span className="text-sm text-gray-500">{s.unit}</span>
               <button onClick={() => receive(s)} disabled={busyId === s.shipmentId}
                 className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
-                {busyId === s.shipmentId ? '⛓️ Recording…' : '✅ Confirm returned'}
+                {busyId === s.shipmentId ? '⛓️ Recording…' : '✅ Confirm arrived'}
               </button>
             </div>
           </div>
         ))}
-        {received.map(s => (
+
+        {inStock.map(s => (
+          <div key={s.shipmentId} className="border border-green-200 bg-green-50 rounded-lg p-4">
+            <div className="flex justify-between gap-2 flex-wrap">
+              <p className="font-semibold text-gray-800">{s.productName} {fromLabel(s)} {s.fromName}</p>
+              <p className="font-bold text-sm text-gray-800">{formatQty(s.available, s.unit)} in stock</p>
+            </div>
+            {s.useBy && <p className="text-xs text-gray-500">Use by {new Date(s.useBy).toLocaleDateString('en-GB')}</p>}
+            {s.recalled && <p className="text-xs text-red-700 font-semibold">🚨 Recalled — don't send it on</p>}
+            {send?.id === s.shipmentId ? (
+              <div className="mt-2 space-y-2">
+                <select value={send.to} onChange={(e) => setSend({ ...send, to: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm">
+                  <option value="">— Send to —</option>
+                  {participants.filter(p => p.role !== 'farm').map(p => (
+                    <option key={p.address} value={p.address}>{p.name} ({p.role === 'restaurant' ? 'restaurant' : 'depot / handler'})</option>
+                  ))}
+                </select>
+                <select value={send.via} onChange={(e) => setSend({ ...send, via: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm">
+                  <option value="">Direct (own delivery)</option>
+                  {participants.filter(p => p.role === 'handler' && p.address !== send.to).map(p => <option key={p.address} value={p.address}>via {p.name}</option>)}
+                </select>
+                <div className="flex gap-2 items-center flex-wrap">
+                  <input type="number" step="any" min="0.001" max={s.available} value={send.quantity}
+                    onChange={(e) => setSend({ ...send, quantity: e.target.value })}
+                    className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+                  <span className="text-sm text-gray-500">{s.unit}</span>
+                  <input type="text" maxLength={280} placeholder="Notes (optional)" value={send.notes}
+                    onChange={(e) => setSend({ ...send, notes: e.target.value })}
+                    className="flex-1 min-w-[8rem] px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={sendOn} disabled={busyId === s.shipmentId}
+                    className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
+                    {busyId === s.shipmentId ? '⛓️ Recording…' : '🚚 Send'}
+                  </button>
+                  <button onClick={() => setSend(null)} className="text-sm text-gray-600 hover:underline">Cancel</button>
+                </div>
+              </div>
+            ) : !s.recalled && (
+              <button onClick={() => setSend({ id: s.shipmentId, to: '', quantity: String(s.available), via: '', notes: '' })}
+                className="mt-2 text-sm text-green-700 font-semibold hover:underline">🚚 Send some on</button>
+            )}
+          </div>
+        ))}
+
+        {done.map(s => (
           <div key={s.shipmentId} className="text-sm text-gray-600 border-b border-gray-100 pb-2">
-            #{s.shipmentId} · {formatQty(s.quantityReceived, s.unit)} {s.productName} back from {s.fromName}
+            #{s.shipmentId} · {formatQty(s.quantityReceived, s.unit)} {s.productName} {fromLabel(s)} {s.fromName}
             <span className="text-gray-400"> · {s.deliveredAt ? new Date(s.deliveredAt).toLocaleDateString('en-GB') : ''}</span>
           </div>
         ))}

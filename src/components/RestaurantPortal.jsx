@@ -201,27 +201,7 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
     }
   };
 
-  useEffect(() => {
-    fetchStock();
-  }, []);
-
-  // ── Form ──
-  const [selectedShipmentId, setSelectedShipmentId] = useState('');
-  const [amountPaid,      setAmountPaid]      = useState('');
-  const [quantitySold,    setQuantitySold]    = useState('');   // custom amount (when no dish is picked)
-  const [dishId,          setDishId]          = useState('');   // '' = type an amount
-  const [servings,        setServings]        = useState('1');
-  const [saveAsDish,      setSaveAsDish]      = useState(false);
-  const [newDishName,     setNewDishName]     = useState('');
-  const [submitting,      setSubmitting]      = useState(false);
-  const [submitErr,       setSubmitErr]       = useState(null);
-
-  // ── Success ──
-  const [createdReceipt, setCreatedReceipt] = useState(null);
-
-  const selected = stock.find(s => String(s.shipmentId) === String(selectedShipmentId)) || null;
-
-  // ── Dishes: saved portion sizes ("Pheasant pie" uses 0.2 kg) ──
+  // ── Dishes: menu price + recipe ──
   const [dishes, setDishes] = useState([]);
   const [showDishes, setShowDishes] = useState(false);
   const fetchDishes = async () => {
@@ -232,57 +212,66 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
       console.error('RestaurantPortal dishes:', err);
     }
   };
-  useEffect(() => { fetchDishes(); }, []);
+  useEffect(() => { fetchStock(); fetchDishes(); }, []);
 
-  // Only dishes measured in the same unit as the chosen stock
-  const dishOptions = selected ? dishes.filter(d => d.unit === selected.unit) : [];
-  const dish = dishOptions.find(d => String(d.id) === String(dishId)) || null;
-  const usedAmount = dish
-    ? Math.round(dish.portion * (Number(servings) || 0) * 1000) / 1000
-    : (quantitySold === '' ? 0 : Number(quantitySold));
+  // ── The bill being built ──
+  const [counts,    setCounts]    = useState({});    // dishId → servings
+  const [extras,    setExtras]    = useState([]);    // [{ key, productName, unit, quantity, name, price }]
+  const [extra,     setExtra]     = useState(null);  // the "something else" form being filled in
+  const [discType,  setDiscType]  = useState('amount');
+  const [discValue, setDiscValue] = useState('');
+  const [ownTotal,  setOwnTotal]  = useState(null);  // a total typed by hand (null = worked out)
+  const [submitting, setSubmitting] = useState(false);
+  const [submitErr,  setSubmitErr]  = useState(null);
+  const [createdReceipt, setCreatedReceipt] = useState(null);
 
-  // When the product changes, pick the dish last used for that product (if still saved)
-  const pickProduct = (shipmentId) => {
-    setSelectedShipmentId(shipmentId);
-    setServings('1');
-    const s = stock.find(x => String(x.shipmentId) === String(shipmentId));
-    let last = '';
-    try { last = localStorage.getItem(`fp_lastDish_${s?.productName}`) || ''; } catch { /* storage unavailable */ }
-    const ok = s && dishes.some(d => String(d.id) === last && d.unit === s.unit);
-    setDishId(ok ? last : '');
+  // Stock grouped by product (e.g. all carrots, from any farm / delivery)
+  const products = Object.values(stock.reduce((g, s) => {
+    if (s.recalled) return g;
+    const k = `${(s.productName || '').trim().toLowerCase()}|${s.unit}`;
+    const p = g[k] || (g[k] = { key: k, productName: (s.productName || '').trim(), unit: s.unit, available: 0, farms: [] });
+    p.available = Math.round((p.available + s.available) * 1000) / 1000;
+    if (s.farmName && !p.farms.includes(s.farmName)) p.farms.push(s.farmName);
+    return g;
+  }, {})).sort((a, b) => a.productName.localeCompare(b.productName));
+
+  const setCount = (id, n) => setCounts({ ...counts, [id]: Math.max(0, n) });
+  const dishLines = dishes.filter(d => counts[d.id] > 0);
+  const lineTotal = (price, n) => (price === null || price === undefined || price === '' ? null : Math.round(Number(price) * n * 100) / 100);
+  const allLines = [
+    ...dishLines.map(d => ({ key: `d${d.id}`, name: d.name, servings: counts[d.id], total: lineTotal(d.price, counts[d.id]) })),
+    ...extras.map(x => ({ key: x.key, name: x.name || `${x.quantity} ${x.unit} ${x.productName}`, servings: 1, total: lineTotal(x.price, 1) })),
+  ];
+  const priced = allLines.filter(l => l.total !== null);
+  const subtotal = priced.length ? Math.round(priced.reduce((n, l) => n + l.total, 0) * 100) / 100 : null;
+  const discount = subtotal === null || discValue === '' ? 0
+    : discType === 'percent' ? Math.round(subtotal * Number(discValue)) / 100 : Number(discValue);
+  const worked = subtotal === null ? null : Math.max(0, Math.round((subtotal - discount) * 100) / 100);
+  const total = ownTotal !== null && ownTotal !== '' ? Number(ownTotal) : worked;
+
+  const addExtra = () => {
+    const p = products.find(x => x.key === extra?.product);
+    if (!p || !(Number(extra.quantity) > 0)) { setSubmitErr('Choose a product and how much was used'); return; }
+    setExtras([...extras, { key: `x${Date.now()}`, productName: p.productName, unit: p.unit, quantity: Number(extra.quantity), name: extra.name?.trim() || '', price: extra.price === '' ? null : extra.price }]);
+    setExtra(null); setSubmitErr(null);
   };
 
-  // ── Submit ──
   const handleCreate = async (e) => {
     e.preventDefault();
-    if (!(usedAmount > 0)) {
-      setSubmitErr('Choose a dish or enter how much was used');
-      return;
-    }
-    if (selected && usedAmount > selected.available) {
-      setSubmitErr(`Only ${formatQty(selected.available, selected.unit)} left in this delivery`);
-      return;
-    }
+    if (!allLines.length) { setSubmitErr('Add at least one dish'); return; }
     setSubmitting(true);
     setSubmitErr(null);
-
     try {
       const res = await axios.post(`${API_BASE}/restaurant/create-receipt`, {
-        shipmentId:     Number(selectedShipmentId),
-        amountPaid:     parseFloat(amountPaid),
-        quantitySold:   usedAmount,          // always taken off this delivery's stock
-        dishName:       dish ? dish.name : (saveAsDish && newDishName.trim() ? newDishName.trim() : undefined),
-        servings:       dish ? Number(servings) : undefined,
+        lines: [
+          ...dishLines.map(d => ({ dishId: d.id, servings: counts[d.id] })),
+          ...extras.map(x => ({ productName: x.productName, unit: x.unit, quantity: x.quantity, name: x.name || undefined, price: x.price ?? undefined })),
+        ],
+        discount: discValue !== '' && Number(discValue) > 0 ? { type: discType, value: Number(discValue) } : undefined,
+        total: ownTotal !== null && ownTotal !== '' ? Number(ownTotal) : undefined,
       }, authHeader);   // restaurant name comes from the login on the backend
-
-      // Remember the dish for next time / save a new one
-      try { if (dish) localStorage.setItem(`fp_lastDish_${selected?.productName}`, String(dish.id)); } catch { /* ignore */ }
-      if (!dish && saveAsDish && newDishName.trim() && selected) {
-        axios.post(`${API_BASE}/restaurant/dishes`, { name: newDishName.trim(), portion: usedAmount, unit: selected.unit }, authHeader)
-          .then(fetchDishes).catch(() => {});
-      }
-
-      setCreatedReceipt(res.data.receipt || res.data.data || res.data);
+      setCreatedReceipt(res.data.receipt);
+      fetchDishes();
     } catch (err) {
       console.error('RestaurantPortal create receipt:', err);
       if (err.response?.data?.code === 'EMAIL_NOT_VERIFIED') setEmailVerified(false);
@@ -293,18 +282,11 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
     }
   };
 
-  // ── Reset ──
   const handleCreateAnother = () => {
     setCreatedReceipt(null);
-    setSelectedShipmentId('');
-    setAmountPaid('');
-    setQuantitySold('');
-    setDishId('');
-    setServings('1');
-    setSaveAsDish(false);
-    setNewDishName('');
-    setSubmitErr(null);
-    fetchStock();
+    setCounts({}); setExtras([]); setExtra(null);
+    setDiscValue(''); setOwnTotal(null); setSubmitErr(null);
+    fetchStock(); fetchDishes();
   };
 
   // ── Logged-in header (shared by all states below) ──
@@ -333,18 +315,12 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
         Check your inbox at <strong>{restaurantUser.email}</strong> for the verification link.
       </p>
       <div className="flex gap-2 mt-3 flex-wrap">
-        <button
-          onClick={handleResend}
-          disabled={verifyBusy}
-          className="bg-yellow-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-yellow-700 transition disabled:bg-gray-400"
-        >
+        <button onClick={handleResend} disabled={verifyBusy}
+          className="bg-yellow-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-yellow-700 transition disabled:bg-gray-400">
           Resend email
         </button>
-        <button
-          onClick={handleCheckAgain}
-          disabled={verifyBusy}
-          className="bg-white text-yellow-800 text-sm font-semibold px-4 py-2 rounded-lg border border-yellow-400 hover:bg-yellow-100 transition disabled:opacity-50"
-        >
+        <button onClick={handleCheckAgain} disabled={verifyBusy}
+          className="bg-white text-yellow-800 text-sm font-semibold px-4 py-2 rounded-lg border border-yellow-400 hover:bg-yellow-100 transition disabled:opacity-50">
           I've verified
         </button>
       </div>
@@ -385,7 +361,7 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
       ].map(t => (
         <button
           key={t.key}
-          onClick={() => { setTab(t.key); if (t.key === 'create') fetchStock(); }}
+          onClick={() => { setTab(t.key); if (t.key === 'create') { fetchStock(); fetchDishes(); } }}
           className={`py-2.5 rounded-lg font-semibold transition text-sm ${
             tab === t.key ? 'bg-orange-600 text-white' : 'text-gray-600 hover:bg-gray-100'
           }`}
@@ -411,13 +387,7 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
 
   // ─── SUCCESS — QR code ───
   if (createdReceipt) {
-    const receiptId = createdReceipt.receiptId || createdReceipt.receipt_id;
-    const batchId   = createdReceipt.batchId   || createdReceipt.batch_id;
-    const amount    = createdReceipt.amountPaid || createdReceipt.amount_paid || amountPaid;
-    const sold      = createdReceipt.quantitySold ?? createdReceipt.quantity_sold ?? null;
-    const unit      = createdReceipt.batch?.unit || selected?.unit || '';
-    const leftAfter = createdReceipt.myStockRemaining;
-
+    const r = createdReceipt;
     return (
       <div className="max-w-4xl mx-auto space-y-6">
         <Header />
@@ -430,56 +400,34 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
 
         <div className="bg-white rounded-lg shadow-lg p-8">
           <div className="flex flex-col items-center">
-            <QRCodeSVG value={receiptLink(receiptId)} size={260} includeMargin={true} bgColor="#ffffff" fgColor="#1f2937" />
-            <p className="font-mono text-sm text-gray-600 mt-4 break-all">{receiptId}</p>
-            <NfcShare url={receiptLink(receiptId)} />
+            <QRCodeSVG value={receiptLink(r.receiptId)} size={260} includeMargin={true} bgColor="#ffffff" fgColor="#1f2937" />
+            <p className="font-mono text-sm text-gray-600 mt-4 break-all">{r.receiptId}</p>
+            <NfcShare url={receiptLink(r.receiptId)} />
           </div>
         </div>
 
         <div className="bg-green-50 border-2 border-green-200 rounded-lg p-6">
-          <h3 className="text-lg font-bold text-gray-800 mb-3">📋 Receipt Summary</h3>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <p className="text-xs text-gray-500 uppercase tracking-wide">Receipt ID</p>
-              <p className="font-mono text-sm font-semibold text-gray-800">{receiptId}</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 uppercase tracking-wide">Restaurant</p>
-              <p className="font-semibold text-gray-800">{restaurantUser.restaurantName}</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 uppercase tracking-wide">Batch</p>
-              <p className="font-mono text-sm font-semibold text-gray-800">{batchId}</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 uppercase tracking-wide">Amount</p>
-              <p className="font-semibold text-gray-800">£{Number(amount).toFixed(2)}</p>
-            </div>
-            {sold !== null && (
-              <>
-                <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wide">Quantity Sold</p>
-                  <p className="font-semibold text-gray-800">
-                    {formatQty(sold, unit)}
-                    {createdReceipt.dishName && (
-                      <span className="font-normal text-gray-600"> · {createdReceipt.servings && Number(createdReceipt.servings) !== 1 ? `${Number(createdReceipt.servings)} × ` : ''}{createdReceipt.dishName}</span>
-                    )}
-                  </p>
-                </div>
-                {leftAfter !== undefined && leftAfter !== null && (
-                  <div>
-                    <p className="text-xs text-gray-500 uppercase tracking-wide">Left From This Delivery</p>
-                    <p className="font-semibold text-gray-800">{formatQty(leftAfter, unit)}</p>
-                  </div>
-                )}
-              </>
-            )}
+          <h3 className="text-lg font-bold text-gray-800 mb-3">📋 The bill</h3>
+          <div className="divide-y divide-green-100">
+            {(r.lines || []).map((l, i) => (
+              <div key={i} className="py-1.5 flex justify-between text-sm">
+                <span>{l.servings !== 1 ? `${l.servings} × ` : ''}{l.name}</span>
+                <span className="font-semibold">{l.lineTotal !== null && l.lineTotal !== undefined ? gbp(l.lineTotal) : ''}</span>
+              </div>
+            ))}
           </div>
+          {r.discount && <p className="text-sm text-gray-600 mt-2 flex justify-between"><span>Discount ({r.discount.type === 'percent' ? `${r.discount.value}%` : gbp(r.discount.value)})</span><span>−{gbp(r.discount.amount)}</span></p>}
+          {r.total !== null && r.total !== undefined && <p className="text-lg font-bold text-gray-800 mt-2 flex justify-between"><span>Total</span><span>{gbp(r.total)}</span></p>}
+          <div className="mt-4 text-xs text-gray-600">
+            <p className="font-semibold text-gray-700 mb-1">Taken off your stock (recorded on the blockchain):</p>
+            {(r.used || []).map(u => <p key={u.shipmentId}>{formatQty(u.quantity, u.unit)} {u.productName} — {u.farmName || 'farm'} · delivery #{u.shipmentId}</p>)}
+          </div>
+          {r.farms?.length > 1 && <p className="text-xs text-green-800 mt-2">🎖️ The customer can collect {r.farms.length} farm badges from this one receipt.</p>}
         </div>
 
         <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-4 text-center">
           <p className="text-yellow-800 text-sm">
-            🖨️ <strong>Tip:</strong> Right-click the QR code → Save image, then print it onto the customer's receipt. The code expires in 7 days.
+            🖨️ <strong>Tip:</strong> Right-click the QR code → Save image, then print it onto the customer's receipt.
           </p>
         </div>
 
@@ -505,7 +453,8 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
     return shell(<Deliveries authHeader={authHeader} approved={approved} onReceived={fetchStock} />);
   }
 
-  // ─── NEW RECEIPT ───
+  // ─── NEW RECEIPT: build the bill ───
+  const usable = dishes.filter(d => d.ingredients?.length);
   return shell(
     <>
       <div className="bg-white rounded-lg shadow-lg p-8">
@@ -524,121 +473,105 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
           </div>
         ) : (
           <form onSubmit={handleCreate} className="space-y-6">
-
-            {/* Which delivery the dish / sale came from */}
+            {/* Dishes */}
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">Product (from your stock)</label>
-              <select
-                value={selectedShipmentId}
-                onChange={(e) => pickProduct(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white"
-                required
-              >
-                <option value="">— Choose a product —</option>
-                {stock.map((s) => (
-                  <option key={s.shipmentId} value={s.shipmentId} disabled={s.recalled}>
-                    {s.recalled ? '🚨 RECALLED — ' : ''}{s.productName || 'Product'} — {s.farmName || 'Farm'} · {formatQty(s.available, s.unit)} left
-                  </option>
-                ))}
-              </select>
-
-              {selected && (
-                <div className="mt-3 bg-green-50 border border-green-200 rounded-lg p-4 grid grid-cols-2 gap-2 text-sm">
-                  <div><span className="text-gray-500">Product:</span> <span className="font-semibold text-gray-800">{selected.productName}</span></div>
-                  <div><span className="text-gray-500">Farm:</span> <span className="font-semibold text-gray-800">{selected.farmName || 'Unknown'}</span></div>
-                  <div><span className="text-gray-500">Batch:</span> <span className="font-mono font-semibold text-gray-800">{selected.batchId}</span></div>
-                  <div><span className="text-gray-500">Delivery:</span> <span className="font-semibold text-gray-800">#{selected.shipmentId}</span></div>
-                  <div><span className="text-gray-500">Received:</span> <span className="font-semibold text-gray-800">{formatQty(selected.quantityReceived, selected.unit)}</span></div>
-                  <div><span className="text-gray-500">Left:</span> <span className="font-semibold text-gray-800">{formatQty(selected.available, selected.unit)}</span></div>
-                  {selected.useBy && (
-                    <div className={`col-span-2 ${new Date(selected.useBy) < new Date() ? 'text-red-600 font-semibold' : ''}`}>
-                      <span className="text-gray-500">Use by:</span> {new Date(selected.useBy).toLocaleDateString('en-GB')}
-                      {new Date(selected.useBy) < new Date() ? ' — this has passed' : ''}
-                    </div>
-                  )}
+              <div className="flex justify-between items-baseline mb-2">
+                <label className="block text-sm font-semibold text-gray-700">What did they have?</label>
+                <button type="button" onClick={() => setShowDishes(true)} className="text-xs text-orange-600 font-semibold hover:underline">+ new dish</button>
+              </div>
+              {usable.length === 0 ? (
+                <p className="text-sm text-gray-500 bg-gray-50 rounded-lg p-3">No dishes yet. Add your dishes (with price and recipe) below, or use "Something else".</p>
+              ) : (
+                <div className="grid sm:grid-cols-2 gap-2">
+                  {usable.map(d => {
+                    const n = counts[d.id] || 0;
+                    const out = d.canMake !== null && d.canMake !== undefined && n >= d.canMake;
+                    return (
+                      <div key={d.id} className={`border rounded-lg p-3 flex justify-between items-center gap-2 ${n ? 'border-orange-400 bg-orange-50' : 'border-gray-200'}`}>
+                        <div className="min-w-0">
+                          <p className="font-semibold text-gray-800 truncate">{d.name}</p>
+                          <p className="text-xs text-gray-500">{d.price !== null ? gbp(d.price) : 'no price'} · {d.canMake === 0 ? <span className="text-red-600">out of stock</span> : `${d.canMake} left`}</p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button type="button" onClick={() => setCount(d.id, n - 1)} disabled={!n}
+                            className="w-8 h-8 rounded-lg bg-gray-100 font-bold text-gray-700 hover:bg-gray-200 disabled:opacity-40">−</button>
+                          <span className="w-6 text-center font-semibold">{n}</span>
+                          <button type="button" onClick={() => setCount(d.id, n + 1)} disabled={out}
+                            className="w-8 h-8 rounded-lg bg-orange-600 font-bold text-white hover:bg-orange-700 disabled:bg-gray-300">+</button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
 
-            {/* Amount */}
+            {/* Something else: an amount of a product, typed in */}
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">Amount Paid (£)</label>
-              <div className="relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">£</span>
-                <input
-                  type="number" step="0.01" min="0.01"
-                  value={amountPaid}
-                  onChange={(e) => setAmountPaid(e.target.value)}
-                  placeholder="12.50"
-                  className="w-full pl-8 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-                  required
-                />
-              </div>
+              {!extra ? (
+                <button type="button" onClick={() => setExtra({ product: '', quantity: '', name: '', price: '' })} className="text-sm text-orange-600 font-semibold hover:underline">
+                  ✏️ Something else (type an amount)
+                </button>
+              ) : (
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2">
+                  <select value={extra.product} onChange={(e) => setExtra({ ...extra, product: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm">
+                    <option value="">— Product from your stock —</option>
+                    {products.map(p => <option key={p.key} value={p.key}>{p.productName} — {formatQty(p.available, p.unit)} left · {p.farms.join(', ')}</option>)}
+                  </select>
+                  <div className="flex gap-2 flex-wrap items-center">
+                    <input type="number" step="any" min="0" value={extra.quantity} onChange={(e) => setExtra({ ...extra, quantity: e.target.value })}
+                      placeholder="Amount used" className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+                    <span className="text-sm text-gray-500">{products.find(p => p.key === extra.product)?.unit || ''}</span>
+                    <input value={extra.name} onChange={(e) => setExtra({ ...extra, name: e.target.value })} maxLength={60}
+                      placeholder="Name on the bill (optional)" className="flex-1 min-w-[8rem] px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+                    <input type="number" step="0.01" min="0" value={extra.price} onChange={(e) => setExtra({ ...extra, price: e.target.value })}
+                      placeholder="£ price" className="w-24 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={addExtra} className="text-sm bg-gray-800 text-white px-3 py-1.5 rounded-lg">Add to bill</button>
+                    <button type="button" onClick={() => setExtra(null)} className="text-sm text-gray-600 hover:underline">Cancel</button>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* What they had — every receipt takes stock off this delivery */}
-            {selected && (
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">What did they have?</label>
-                <select
-                  value={dishId}
-                  onChange={(e) => { setDishId(e.target.value); setServings('1'); }}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white"
-                >
-                  <option value="">✏️ Type an amount</option>
-                  {dishOptions.map(d => (
-                    <option key={d.id} value={d.id}>{d.name} — {formatQty(d.portion, d.unit)} each</option>
-                  ))}
-                </select>
-
-                {dish ? (
-                  <div className="flex items-center gap-2 mt-3">
-                    <span className="text-sm text-gray-600">How many:</span>
-                    <button type="button" onClick={() => setServings(String(Math.max(1, (Number(servings) || 1) - 1)))}
-                      className="w-9 h-9 rounded-lg bg-gray-100 font-bold text-gray-700 hover:bg-gray-200">−</button>
-                    <input type="number" min="1" step="1" value={servings}
-                      onChange={(e) => setServings(e.target.value)}
-                      className="w-16 text-center px-2 py-2 border border-gray-300 rounded-lg" />
-                    <button type="button" onClick={() => setServings(String((Number(servings) || 0) + 1))}
-                      className="w-9 h-9 rounded-lg bg-gray-100 font-bold text-gray-700 hover:bg-gray-200">+</button>
+            {/* The bill */}
+            {allLines.length > 0 && (
+              <div className="border-2 border-orange-200 rounded-lg p-4">
+                <p className="text-sm font-semibold text-gray-700 mb-2">🧾 Bill</p>
+                {allLines.map(l => (
+                  <div key={l.key} className="flex justify-between text-sm py-0.5">
+                    <span>
+                      {l.servings !== 1 ? `${l.servings} × ` : ''}{l.name}
+                      {l.key.startsWith('x') && <button type="button" onClick={() => setExtras(extras.filter(x => x.key !== l.key))} className="text-xs text-red-500 ml-2">✕</button>}
+                    </span>
+                    <span>{l.total !== null ? gbp(l.total) : '—'}</span>
                   </div>
-                ) : (
-                  <div className="mt-3">
-                    <div className="relative">
-                      <input
-                        type="number" step="any" min="0"
-                        max={selected.available}
-                        value={quantitySold}
-                        onChange={(e) => setQuantitySold(e.target.value)}
-                        placeholder="e.g. 0.25"
-                        className="w-full pl-4 pr-16 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-                      />
-                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">{selected.unit}</span>
-                    </div>
-                    <label className="flex items-center gap-2 mt-2 text-sm text-gray-600 cursor-pointer">
-                      <input type="checkbox" checked={saveAsDish} onChange={(e) => setSaveAsDish(e.target.checked)} />
-                      Save this as a dish for next time
-                    </label>
-                    {saveAsDish && (
-                      <input type="text" maxLength={60} value={newDishName}
-                        onChange={(e) => setNewDishName(e.target.value)}
-                        placeholder="Dish name, e.g. Pheasant pie"
-                        className="w-full mt-2 px-4 py-2 border border-gray-300 rounded-lg text-sm" />
-                    )}
-                  </div>
-                )}
-
-                {usedAmount > 0 && (
-                  <p className={`text-sm mt-2 ${usedAmount > selected.available ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
-                    Takes <strong>{formatQty(usedAmount, selected.unit)}</strong> off this delivery
-                    {usedAmount > selected.available
-                      ? ` — only ${formatQty(selected.available, selected.unit)} left`
-                      : ` · ${formatQty(Math.round((selected.available - usedAmount) * 1000) / 1000, selected.unit)} left after`}
-                  </p>
-                )}
-                <p className="text-xs text-gray-400 mt-1">
-                  Recorded on the blockchain, so receipts can never add up to more than you received. A rough portion size is fine.
-                </p>
+                ))}
+                <div className="flex gap-2 items-center mt-3 text-sm flex-wrap">
+                  <span className="text-gray-600">Discount</span>
+                  <select value={discType} onChange={(e) => setDiscType(e.target.value)} className="px-2 py-1 border border-gray-300 rounded bg-white">
+                    <option value="amount">£</option>
+                    <option value="percent">%</option>
+                  </select>
+                  <input type="number" step="0.01" min="0" value={discValue} onChange={(e) => setDiscValue(e.target.value)} placeholder="0"
+                    className="w-20 px-2 py-1 border border-gray-300 rounded" />
+                  {discount > 0 && <span className="text-gray-500">−{gbp(discount)}</span>}
+                </div>
+                <div className="flex justify-between items-center mt-3 border-t pt-2">
+                  <span className="font-bold text-gray-800">Total</span>
+                  {ownTotal === null ? (
+                    <span className="font-bold text-lg">{total !== null ? gbp(total) : <span className="text-sm font-normal text-gray-400">no prices — type one</span>}
+                      <button type="button" onClick={() => setOwnTotal(total !== null ? String(total) : '')} className="text-xs text-blue-600 font-normal ml-2 hover:underline">change</button>
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1">£
+                      <input type="number" step="0.01" min="0" value={ownTotal} onChange={(e) => setOwnTotal(e.target.value)} className="w-24 px-2 py-1 border border-gray-300 rounded" />
+                      <button type="button" onClick={() => setOwnTotal(null)} className="text-xs text-gray-500 hover:underline">auto</button>
+                    </span>
+                  )}
+                </div>
               </div>
             )}
 
@@ -650,7 +583,7 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
 
             <button
               type="submit"
-              disabled={submitting || emailVerified === false || !approved}
+              disabled={submitting || emailVerified === false || !approved || !allLines.length}
               className="w-full bg-orange-600 text-white py-3 rounded-lg font-bold text-lg hover:bg-orange-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed"
             >
               {submitting               ? '⏳ Creating receipt…'
@@ -658,26 +591,27 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
                : !approved               ? '🔒 Waiting for approval'
                :                           '🧾 Generate Receipt QR'}
             </button>
+            <p className="text-xs text-gray-400 -mt-3">
+              Ingredients come off your deliveries, soonest use-by first, in one blockchain transaction — receipts can never add up to more than you received.
+            </p>
           </form>
         )}
       </div>
 
-      {stock.length > 0 && (
-        <div className="bg-white rounded-lg shadow-lg p-6">
-          <button type="button" onClick={() => setShowDishes(!showDishes)}
-            className="w-full flex justify-between items-center text-left">
-            <span className="text-lg font-bold text-gray-800">🍲 Your dishes <span className="text-sm font-normal text-gray-500">({dishes.length})</span></span>
-            <span className="text-sm text-orange-600 font-semibold">{showDishes ? 'Hide' : 'Manage'}</span>
-          </button>
-          {showDishes && <DishManager dishes={dishes} authHeader={authHeader} onChanged={fetchDishes} />}
-        </div>
-      )}
+      <div className="bg-white rounded-lg shadow-lg p-6">
+        <button type="button" onClick={() => setShowDishes(!showDishes)}
+          className="w-full flex justify-between items-center text-left">
+          <span className="text-lg font-bold text-gray-800">🍲 Your dishes <span className="text-sm font-normal text-gray-500">({dishes.length})</span></span>
+          <span className="text-sm text-orange-600 font-semibold">{showDishes ? 'Hide' : 'Manage'}</span>
+        </button>
+        {showDishes && <DishManager dishes={dishes} authHeader={authHeader} onChanged={fetchDishes} />}
+      </div>
 
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-5">
         <h3 className="text-sm font-bold text-blue-800 mb-2">💡 How this works</h3>
         <p className="text-blue-700 text-sm">
-          Pick the product the customer had and enter what they paid. Print the QR code on their receipt — when they scan it,
-          they see the journey their food took to your door and can claim a Farm Badge.
+          Tap the dishes on the customer's bill. The total adds itself up (add a discount, or type a different total if you need to).
+          Print the QR code on their receipt — when they scan it, they see where their food came from and collect a badge for each farm.
         </p>
       </div>
     </>
@@ -685,14 +619,16 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
 }
 
 // ─────────────────────────────────────────────────────────
-// Order Stock — browse batches from farms and send an order.
-// The farm accepts by dispatching it (recorded on-chain).
+// Order Stock — products from farms (the farm sends the soonest use-by first),
+// and short-date deals. The farm accepts by dispatching it (recorded on-chain).
 // ─────────────────────────────────────────────────────────
 function OrderStock({ authHeader, approved }) {
-  const [catalog,  setCatalog]  = useState([]);
+  const [products, setProducts] = useState([]);
+  const [deals,    setDeals]    = useState([]);
   const [orders,   setOrders]   = useState([]);
-  const [batchId,  setBatchId]  = useState('');
+  const [pick,     setPick]     = useState('');       // product key, or "deal:<batchId>"
   const [quantity, setQuantity] = useState('');
+  const [until,    setUntil]    = useState('');
   const [note,     setNote]     = useState('');
   const [busy,     setBusy]     = useState(false);
   const [error,    setError]    = useState(null);
@@ -704,7 +640,8 @@ function OrderStock({ authHeader, approved }) {
         axios.get(`${API_BASE}/restaurant/catalog`, authHeader),
         axios.get(`${API_BASE}/restaurant/orders`, authHeader),
       ]);
-      setCatalog(c.data.batches || []);
+      setProducts(c.data.products || []);
+      setDeals(c.data.deals || []);
       setOrders(o.data.orders || []);
     } catch (err) {
       setError(err.response?.data?.error || 'Could not load products');
@@ -712,17 +649,23 @@ function OrderStock({ authHeader, approved }) {
   };
   useEffect(() => { load(); }, []);
 
-  const batch = catalog.find(b => b.batchId === batchId) || null;
+  const deal = pick.startsWith('deal:') ? deals.find(d => `deal:${d.batchId}` === pick) : null;
+  const product = !deal ? products.find(p => p.key === pick) : null;
+  const max = deal ? deal.remaining : product?.available;
+  const unit = deal?.unit || product?.unit || '';
+  const price = deal ? deal.dealPrice : product?.pricePerUnit;
+  const day = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 
   const submit = async (e) => {
     e.preventDefault();
-    setBusy(true);
-    setError(null);
-    setMessage(null);
+    setBusy(true); setError(null); setMessage(null);
     try {
-      await axios.post(`${API_BASE}/restaurant/orders`, { batchId, quantity, note }, authHeader);
-      setMessage(`Order sent to ${batch?.farmName || 'the farm'}. You'll see it in Deliveries once they dispatch it.`);
-      setBatchId(''); setQuantity(''); setNote('');
+      const body = deal
+        ? { dealBatchId: deal.batchId, quantity, note }
+        : { farmerAddress: product.farmerAddress, productName: product.productName, unit: product.unit, quantity, neededUntil: until || undefined, note };
+      await axios.post(`${API_BASE}/restaurant/orders`, body, authHeader);
+      setMessage(`Order sent to ${(deal || product)?.farmName || 'the farm'}. You'll see it in Deliveries once they dispatch it.`);
+      setPick(''); setQuantity(''); setNote(''); setUntil('');
       load();
     } catch (err) {
       setError(err.response?.data?.error || 'Could not place the order');
@@ -750,45 +693,79 @@ function OrderStock({ authHeader, approved }) {
 
   return (
     <div className="space-y-6">
+      {deals.length > 0 && (
+        <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-5">
+          <h3 className="text-lg font-bold text-amber-900 mb-1">🏷️ Short-date deals</h3>
+          <p className="text-xs text-amber-800 mb-3">Reduced by the farm because the use-by is close — great for today's specials.</p>
+          <div className="space-y-2">
+            {deals.map(d => (
+              <button key={d.batchId} type="button" onClick={() => { setPick(`deal:${d.batchId}`); setQuantity(String(d.remaining)); }}
+                className={`w-full text-left bg-white border rounded-lg p-3 flex justify-between gap-2 flex-wrap ${pick === `deal:${d.batchId}` ? 'border-amber-500 ring-2 ring-amber-300' : 'border-amber-200'}`}>
+                <span><strong>{d.productName}</strong> — {d.farmName} · {formatQty(d.remaining, d.unit)} · use by {d.useBy ? day(d.useBy) : '—'}</span>
+                <span>{d.normalPrice !== null && <span className="line-through text-gray-400 mr-1">{gbp(d.normalPrice)}</span>}<strong className="text-amber-800">{gbp(d.dealPrice)}/{d.unit}</strong></span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-lg shadow-lg p-8">
         <h3 className="text-lg font-bold text-gray-800 mb-1">🛒 Order from a farm</h3>
-        <p className="text-sm text-gray-500 mb-5">Payment is arranged directly with the farm for now (invoice or bank transfer).</p>
+        <p className="text-sm text-gray-500 mb-5">Choose a product — the farm sends the stock with the soonest use-by first. Payment is arranged directly with the farm for now.</p>
 
         <form onSubmit={submit} className="space-y-5">
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-2">Product</label>
-            <select value={batchId} onChange={(e) => setBatchId(e.target.value)} required
+            <select value={pick} onChange={(e) => { setPick(e.target.value); setQuantity(''); }} required
               className="w-full px-4 py-3 border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-orange-500 focus:border-transparent">
               <option value="">— Choose a product —</option>
-              {catalog.map(b => (
-                <option key={b.batchId} value={b.batchId}>
-                  {b.productName} — {b.farmName || 'Farm'} · {formatQty(b.remaining, b.unit)} available{b.pricePerUnit != null ? ` · ${gbp(b.pricePerUnit)}/${b.unit}` : ''}
+              {products.map(p => (
+                <option key={p.key} value={p.key}>
+                  {p.productName} — {p.farmName || 'Farm'} · {formatQty(p.available, p.unit)}
+                  {p.priceFrom !== null ? ` · ${p.priceFrom === p.priceTo ? gbp(p.priceFrom) : `${gbp(p.priceFrom)}–${gbp(p.priceTo)}`}/${p.unit}` : ''}
                 </option>
               ))}
+              {deals.length > 0 && <optgroup label="🏷️ Short-date deals">
+                {deals.map(d => <option key={d.batchId} value={`deal:${d.batchId}`}>{d.productName} — {d.farmName} · {formatQty(d.remaining, d.unit)} · {gbp(d.dealPrice)}/{d.unit} (use by {d.useBy ? day(d.useBy) : '—'})</option>)}
+              </optgroup>}
             </select>
-          </div>
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Quantity</label>
-            <div className="relative">
-              <input type="number" step="any" min="0.001" max={batch ? batch.remaining : undefined}
-                value={quantity} onChange={(e) => setQuantity(e.target.value)} required placeholder="e.g. 50"
-                className="w-full pl-4 pr-16 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent" />
-              {batch?.unit && <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">{batch.unit}</span>}
-            </div>
-            {batch && (
-              <p className="text-sm text-gray-600 mt-2">
-                {batch.pricePerUnit != null ? (
-                  <>
-                    {gbp(batch.pricePerUnit)} per {batch.unit}
-                    {Number(quantity) > 0 && <> · estimated <strong>{gbp(Number(quantity) * batch.pricePerUnit)}</strong></>}
-                    <span className="block text-xs text-gray-400">The farm confirms the final price and any delivery charge when it dispatches.</span>
-                  </>
-                ) : (
-                  <span className="text-gray-400">No price listed — the farm will confirm the price when it dispatches.</span>
-                )}
+            {product && (
+              <p className="text-xs text-gray-500 mt-1">
+                Use-by {product.useByFrom ? `from ${day(product.useByFrom)}` : 'not set'}{product.useByTo && product.useByTo !== product.useByFrom ? ` to ${day(product.useByTo)}` : ''} · {product.batches} batch{product.batches === 1 ? '' : 'es'}
               </p>
             )}
           </div>
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Quantity</label>
+              <div className="relative">
+                <input type="number" step="any" min="0.001" max={max}
+                  value={quantity} onChange={(e) => setQuantity(e.target.value)} required placeholder="e.g. 10"
+                  className="w-full pl-4 pr-16 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent" />
+                {unit && <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">{unit}</span>}
+              </div>
+            </div>
+            {!deal && (
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Needs to last until <span className="font-normal text-gray-400">(optional)</span></label>
+                <input type="date" value={until} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setUntil(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg" />
+              </div>
+            )}
+          </div>
+          {(product || deal) && (
+            <p className="text-sm text-gray-600">
+              {price !== null && price !== undefined ? (
+                <>
+                  about {gbp(price)} per {unit}
+                  {Number(quantity) > 0 && <> · estimated <strong>{gbp(Number(quantity) * price)}</strong></>}
+                  <span className="block text-xs text-gray-400">The farm confirms the final price and any delivery charge when it dispatches.</span>
+                </>
+              ) : (
+                <span className="text-gray-400">No price listed — the farm will confirm the price when it dispatches.</span>
+              )}
+            </p>
+          )}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-2">Note to the farm <span className="font-normal text-gray-400">(optional)</span></label>
             <input type="text" value={note} onChange={(e) => setNote(e.target.value)} maxLength={280}
@@ -813,8 +790,14 @@ function OrderStock({ authHeader, approved }) {
             {orders.map(o => (
               <div key={o.id} className="py-3 flex justify-between gap-3 flex-wrap">
                 <div>
-                  <p className="font-semibold text-gray-800">{formatQty(o.quantity, o.unit)} {o.productName} — {o.farmName}</p>
-                  <p className="text-xs text-gray-500">{new Date(o.createdAt).toLocaleDateString('en-GB')}{o.note ? ` · "${o.note}"` : ''}</p>
+                  <p className="font-semibold text-gray-800">{formatQty(o.quantitySent ?? o.quantity, o.unit)} {o.productName} — {o.farmName}{o.isDeal ? ' 🏷️' : ''}</p>
+                  {o.quantitySent != null && o.quantitySent !== o.quantity && <p className="text-xs text-amber-700">You asked for {formatQty(o.quantity, o.unit)} — the farm sent {formatQty(o.quantitySent, o.unit)}</p>}
+                  <p className="text-xs text-gray-500">
+                    {new Date(o.createdAt).toLocaleDateString('en-GB')}{o.neededUntil ? ` · needs to last until ${day(o.neededUntil)}` : ''}{o.note ? ` · "${o.note}"` : ''}
+                  </p>
+                  {o.dispatches?.length > 1 && (
+                    <p className="text-xs text-gray-600">Coming as {o.dispatches.length} deliveries: {o.dispatches.map(d => `${formatQty(d.quantity, o.unit)} (use by ${d.useBy ? day(d.useBy) : '—'})`).join(' + ')}</p>
+                  )}
                   {o.farmerNote && <p className="text-xs text-gray-600 italic">Farm: "{o.farmerNote}"</p>}
                   {o.total != null && (
                     <p className="text-xs text-gray-700">
@@ -827,7 +810,6 @@ function OrderStock({ authHeader, approved }) {
                 </div>
                 <div className="text-right space-y-1">
                   {(() => {
-                    // Once the delivery is confirmed, show "Delivered" instead of "On its way"
                     const st = o.status === 'dispatched' && o.shipmentStatus === 'delivered' ? 'delivered' : o.status;
                     return (
                       <span className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full ${STATUS[st]?.[1] || ''}`}>
@@ -852,23 +834,37 @@ function OrderStock({ authHeader, approved }) {
 }
 
 // ─────────────────────────────────────────────────────────
-// Deliveries — shipments sent to this restaurant.
-// Confirming what arrived is recorded on-chain as this restaurant.
+// Your dishes: menu price + recipe (what goes into one serving).
+// Ingredients are matched to your stock by product name, from any farm, soonest use-by first.
 // ─────────────────────────────────────────────────────────
-// Save / remove dishes (portion sizes) used when making receipts
 function DishManager({ dishes, authHeader, onChanged }) {
-  const [name,    setName]    = useState('');
-  const [portion, setPortion] = useState('');
-  const [unit,    setUnit]    = useState('kg');
-  const [busy,    setBusy]    = useState(false);
-  const [error,   setError]   = useState(null);
+  const blank = { id: null, name: '', price: '', ingredients: [{ product: '', portion: '' }] };
+  const [form,     setForm]     = useState(null);    // the dish being added / edited
+  const [products, setProducts] = useState([]);
+  const [busy,     setBusy]     = useState(false);
+  const [error,    setError]    = useState(null);
 
-  const add = async (e) => {
+  useEffect(() => {
+    axios.get(`${API_BASE}/restaurant/products`, authHeader).then(r => setProducts(r.data.products || [])).catch(() => {});
+  }, []);
+  const keyOf = (p) => `${p.productName.toLowerCase()}|${p.unit}`;
+
+  const edit = (d) => setForm({
+    id: d.id, name: d.name, price: d.price ?? '',
+    ingredients: d.ingredients?.length ? d.ingredients.map(i => ({ product: keyOf(i), portion: String(i.portion), productName: i.productName, unit: i.unit })) : [{ product: '', portion: '' }]
+  });
+  const setIng = (i, k, v) => setForm({ ...form, ingredients: form.ingredients.map((x, j) => (j === i ? { ...x, [k]: v } : x)) });
+
+  const save = async (e) => {
     e.preventDefault();
     setBusy(true); setError(null);
     try {
-      await axios.post(`${API_BASE}/restaurant/dishes`, { name, portion: Number(portion), unit }, authHeader);
-      setName(''); setPortion('');
+      const ingredients = form.ingredients.filter(i => i.product).map(i => {
+        const p = products.find(x => keyOf(x) === i.product) || { productName: i.productName, unit: i.unit };
+        return { productName: p.productName, unit: p.unit, portion: Number(i.portion) };
+      });
+      await axios.post(`${API_BASE}/restaurant/dishes`, { id: form.id || undefined, name: form.name, price: form.price === '' ? null : Number(form.price), ingredients }, authHeader);
+      setForm(null);
       onChanged?.();
     } catch (err) {
       setError(err.response?.data?.error || 'Could not save the dish');
@@ -887,42 +883,87 @@ function DishManager({ dishes, authHeader, onChanged }) {
     }
   };
 
+  // Products in the recipe list: what you've received, plus anything already in a recipe
+  const options = [...products];
+  (form?.ingredients || []).forEach(i => { if (i.product && !options.some(p => keyOf(p) === i.product) && i.productName) options.push({ productName: i.productName, unit: i.unit, inStock: 0, farms: [] }); });
+
   return (
     <div className="mt-4">
       <p className="text-sm text-gray-500 mb-3">
-        Roughly how much of the product goes into one serving. Saving the same name again updates the portion.
+        A dish has a menu price and a recipe — roughly how much of each product goes into one serving. Then a receipt is just "2 × Pheasant pie".
       </p>
       {dishes.length === 0 ? (
         <p className="text-sm text-gray-400 mb-3">No dishes saved yet.</p>
       ) : (
         <ul className="divide-y divide-gray-100 mb-4">
           {dishes.map(d => (
-            <li key={d.id} className="py-2 flex justify-between items-center gap-3">
-              <span className="text-sm text-gray-800"><strong>{d.name}</strong> — {formatQty(d.portion, d.unit)} each</span>
-              <button type="button" onClick={() => remove(d)} className="text-xs text-red-600 hover:underline">Remove</button>
+            <li key={d.id} className="py-2 flex justify-between items-start gap-3">
+              <div className="text-sm min-w-0">
+                <p className="text-gray-800"><strong>{d.name}</strong>{d.price !== null ? ` — ${gbp(d.price)}` : ''}</p>
+                {d.ingredients?.length ? (
+                  <p className="text-xs text-gray-500">{d.ingredients.map(i => `${formatQty(i.portion, i.unit)} ${i.productName}`).join(' + ')}{d.canMake !== null ? ` · ${d.canMake} can be made from today's stock` : ''}</p>
+                ) : (
+                  <p className="text-xs text-amber-700">⚠️ No recipe yet{d.portion ? ` (old dish: ${formatQty(d.portion, d.unit)})` : ''} — edit it to add ingredients</p>
+                )}
+              </div>
+              <div className="flex gap-3 shrink-0">
+                <button type="button" onClick={() => edit(d)} className="text-xs text-blue-600 hover:underline">Edit</button>
+                <button type="button" onClick={() => remove(d)} className="text-xs text-red-600 hover:underline">Remove</button>
+              </div>
             </li>
           ))}
         </ul>
       )}
-      <form onSubmit={add} className="flex gap-2 flex-wrap items-center">
-        <input type="text" required maxLength={60} value={name} onChange={(e) => setName(e.target.value)}
-          placeholder="Dish name" className="flex-1 min-w-[10rem] px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-        <input type="number" required step="any" min="0.001" value={portion} onChange={(e) => setPortion(e.target.value)}
-          placeholder="0.2" className="w-24 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-        <select value={unit} onChange={(e) => setUnit(e.target.value)}
-          className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
-          {['kg', 'units', 'litres', 'dozen'].map(u => <option key={u} value={u}>{u}</option>)}
-        </select>
-        <button type="submit" disabled={busy}
-          className="bg-orange-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-orange-700 disabled:bg-gray-400">
-          {busy ? 'Saving…' : '+ Add dish'}
-        </button>
-      </form>
+
+      {!form ? (
+        <button type="button" onClick={() => setForm(blank)} className="bg-orange-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-orange-700">+ Add a dish</button>
+      ) : (
+        <form onSubmit={save} className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-3">
+          <div className="flex gap-2 flex-wrap">
+            <input type="text" required maxLength={60} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="Dish name, e.g. Pheasant pie" className="flex-1 min-w-[10rem] px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+            <div className="flex items-center gap-1 text-sm">£
+              <input type="number" step="0.01" min="0" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })}
+                placeholder="Menu price" className="w-28 px-3 py-2 border border-gray-300 rounded-lg" />
+            </div>
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-gray-700 mb-1">Recipe — per serving</p>
+            {form.ingredients.map((ing, i) => {
+              const p = options.find(x => keyOf(x) === ing.product);
+              return (
+                <div key={i} className="flex gap-2 items-center mb-1 flex-wrap">
+                  <select value={ing.product} onChange={(e) => setIng(i, 'product', e.target.value)} className="flex-1 min-w-[10rem] px-2 py-1.5 border border-gray-300 rounded bg-white text-sm">
+                    <option value="">— Product —</option>
+                    {options.map(x => <option key={keyOf(x)} value={keyOf(x)}>{x.productName} ({x.unit}){x.inStock ? ` · ${formatQty(x.inStock, x.unit)} in stock` : ''}</option>)}
+                  </select>
+                  <input type="number" step="any" min="0" value={ing.portion} onChange={(e) => setIng(i, 'portion', e.target.value)}
+                    placeholder="0.2" className="w-24 px-2 py-1.5 border border-gray-300 rounded text-sm" />
+                  <span className="text-xs text-gray-500 w-10">{p?.unit || ''}</span>
+                  {form.ingredients.length > 1 && <button type="button" onClick={() => setForm({ ...form, ingredients: form.ingredients.filter((_, j) => j !== i) })} className="text-xs text-red-600">✕</button>}
+                </div>
+              );
+            })}
+            <button type="button" onClick={() => setForm({ ...form, ingredients: [...form.ingredients, { product: '', portion: '' }] })} className="text-xs text-blue-600 hover:underline">+ ingredient</button>
+            {products.length === 0 && <p className="text-xs text-gray-400 mt-1">Products appear here once you've received a delivery.</p>}
+          </div>
+          <div className="flex gap-2">
+            <button type="submit" disabled={busy} className="bg-orange-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-orange-700 disabled:bg-gray-400">
+              {busy ? 'Saving…' : 'Save dish'}
+            </button>
+            <button type="button" onClick={() => setForm(null)} className="text-sm text-gray-600 hover:underline">Cancel</button>
+          </div>
+        </form>
+      )}
       {error && <p className="text-sm text-red-600 mt-2">⚠️ {error}</p>}
     </div>
   );
 }
 
+// ─────────────────────────────────────────────────────────
+// Deliveries — shipments sent to this restaurant.
+// Confirming what arrived is recorded on-chain as this restaurant.
+// ─────────────────────────────────────────────────────────
 function Deliveries({ authHeader, approved, onReceived }) {
   const [shipments, setShipments] = useState([]);
   const [loading,   setLoading]   = useState(true);
@@ -1243,7 +1284,7 @@ function ReceiptHistory({ restaurantToken, onLogout }) {
         <div key={r.receiptId} className="bg-white rounded-lg shadow-lg p-5">
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div className="min-w-0">
-              <p className="font-bold text-gray-800">{r.productName || 'Product'}</p>
+              <p className="font-bold text-gray-800">{r.dishName || r.productName || 'Product'}</p>
               <p className="font-mono text-xs text-gray-500 break-all">{r.receiptId}</p>
               <p className="text-sm text-gray-500 mt-1">
                 {new Date(r.createdAt).toLocaleString('en-GB', {
