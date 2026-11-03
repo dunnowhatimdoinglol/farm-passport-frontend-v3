@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import CreateBatchForm from './CreateBatchForm';
 import { QRCodeSVG } from 'qrcode.react';
-import { FarmerOrders, DispatchForm, FarmerShipments, FarmerReturns } from './FarmerSupply';
+import { FarmerOrders, DispatchForm, FarmerShipments, FarmerReturns, FarmerMeatList } from './FarmerSupply';
 import { formatQty, batchLink } from './walletHelpers';
 import NfcShare from './NfcShare';
 
@@ -436,6 +436,9 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
       {/* Orders from restaurants */}
       <FarmerOrders farmerToken={farmerToken} approved={approved} refreshKey={refreshTrigger} onChanged={refreshAll} />
 
+      {/* Meat list (what cafés can order) + cutting list (what they've pre-ordered) */}
+      {approved && <FarmerMeatList farmerToken={farmerToken} refreshKey={refreshTrigger} />}
+
       {/* Shipments sent */}
       <FarmerShipments farmerToken={farmerToken} refreshKey={refreshTrigger} onChanged={refreshAll} />
 
@@ -678,6 +681,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
                     <DispatchForm
                       farmerToken={farmerToken}
                       batch={batch}
+                      batches={batches}
                       onCancel={() => setDispatchBatchId(null)}
                       onDone={() => { setDispatchBatchId(null); refreshAll(); }}
                     />

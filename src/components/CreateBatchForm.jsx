@@ -18,6 +18,8 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
   // Livestock (going to an abattoir): species, ear tag / flock mark, where it was born and reared — all on-chain
   const [species, setSpecies] = useState('Cattle');
   const [animalRef, setAnimalRef] = useState('');
+  const [earTags, setEarTags] = useState('');             // cattle: one ear tag per line → one batch per animal
+  const [progress, setProgress] = useState(null);         // "Registering 2 of 5…"
   const [breed, setBreed] = useState('');
   const [bornIn, setBornIn] = useState('United Kingdom');
   const [rearedIn, setRearedIn] = useState('United Kingdom');
@@ -27,22 +29,23 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
   const [createdBatch, setCreatedBatch] = useState(null);
   const [qrCodeUrl, setQrCodeUrl] = useState('');
 
-  const productTypes = ['Vegetable', 'Fruit', 'Meat', 'Dairy', 'Grain', 'Livestock'];
+  // No "Meat": meat sold to cafés comes from an approved abattoir, so register the live animals instead
+  const productTypes = ['Vegetable', 'Fruit', 'Dairy', 'Grain', 'Livestock'];
   const units = ['kg', 'units', 'litres', 'dozen'];
   const isLivestock = productType === 'Livestock';
+  const isCattle = isLivestock && species === 'Cattle';
+  const tags = earTags.split(/[\n,;]+/).map(t => t.trim().replace(/\s+/g, ' ')).filter(Boolean);
+  const dupTag = tags.find((t, i) => tags.findIndex(x => x.replace(/ /g, '').toUpperCase() === t.replace(/ /g, '').toUpperCase()) !== i);
   const SPECIES = { Cattle: 'Cattle', Sheep: 'Sheep / lambs', Pig: 'Pigs', Goat: 'Goats' };
   const refLabel = species === 'Cattle' ? 'Ear tag number' : species === 'Pig' ? 'Herd mark' : 'Flock mark';
   const refExample = species === 'Cattle' ? 'e.g. UK 123456 700123' : species === 'Pig' ? 'e.g. AB1234' : 'e.g. UK 0123456';
 
   const chooseType = (t) => {
     setProductType(t);
-    if (t === 'Livestock') { setUnit('head'); if (species === 'Cattle') setQuantity('1'); }
+    if (t === 'Livestock') setUnit('head');
     else if (unit === 'head') setUnit('kg');
   };
-  const chooseSpecies = (sp) => {
-    setSpecies(sp);
-    if (sp === 'Cattle') setQuantity('1');
-  };
+  const chooseSpecies = (sp) => setSpecies(sp);
 
   const generateBatchId = () => {
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -54,6 +57,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    if (isCattle) return registerCattle();
     setLoading(true);
 
     try {
@@ -98,7 +102,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
       // Reset form
       setBatchId('');
       setProductName('');
-      setQuantity(isLivestock && species === 'Cattle' ? '1' : '');
+      setQuantity('');
       setAnimalRef('');
 
     } catch (err) {
@@ -106,6 +110,39 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
       setError(err.response?.data?.error || err.message || 'Failed to create batch');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Cattle: one batch per animal (each has its own ear tag and passport), all with the same details
+  const registerCattle = async () => {
+    if (!tags.length) { setError('Enter at least one ear tag'); return; }
+    if (dupTag) { setError(`${dupTag} is in the list twice`); return; }
+    setLoading(true);
+    const done = [];
+    const failed = [];
+    for (const [i, tag] of tags.entries()) {
+      setProgress(`Registering ${i + 1} of ${tags.length}…`);
+      const id = `COW-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+      try {
+        const r = await axios.post('https://farm-passport-backend-v3.onrender.com/api/farmer/create-batch', {
+          batchId: id, productType: 'Livestock', productName, quantity: 1, unit: 'head',
+          harvestDate: harvestDate || undefined, season: season === 'auto' ? null : season,
+          species, animalRef: tag, breed: breed || undefined, bornIn, rearedIn
+        }, { headers: { Authorization: `Bearer ${farmerToken}` } });
+        done.push({ batchId: id, animalRef: tag, transactionHash: r.data.transactionHash, warning: r.data.originWarning || null });
+      } catch (err) {
+        failed.push(`${tag}: ${err.response?.data?.error || err.message}`);
+      }
+    }
+    setProgress(null);
+    setLoading(false);
+    if (failed.length) setError(`${done.length ? `${done.length} registered. ` : ''}Not registered — ${failed.join(' · ')}`);
+    if (done.length) {
+      setEarTags(failed.map(f => f.split(':')[0]).join('\n'));
+      const qrUrl = done.length === 1 ? await QRCode.toDataURL(batchLink(done[0].batchId), { width: 300, margin: 2 }) : '';
+      setQrCodeUrl(qrUrl);
+      setCreatedBatch({ batchId: done[0].batchId, productName, transactionHash: done[0].transactionHash, list: done });
+      setShowSuccess(true);
     }
   };
 
@@ -127,7 +164,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
   return (
     <>
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
+        {!isCattle && <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
             Batch ID *
           </label>
@@ -151,7 +188,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
           <p className="text-xs text-gray-500 mt-1">
             Unique identifier for this batch
           </p>
-        </div>
+        </div>}
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -167,6 +204,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
               <option key={type} value={type}>{type === 'Livestock' ? 'Livestock (going to an abattoir)' : type}</option>
             ))}
           </select>
+          {!isLivestock && <p className="text-xs text-gray-500 mt-1">Selling meat? Register the live animals as <strong>Livestock</strong>. The abattoir records the carcass and cuts, and cafés order them from your meat list.</p>}
         </div>
 
         {/* Livestock: who the animals are — this goes on the blockchain, so every cut can be traced back */}
@@ -181,11 +219,17 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
                   {Object.entries(SPECIES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                 </select>
               </div>
-              <div>
+              {!isCattle && <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">{refLabel} *</label>
                 <input value={animalRef} onChange={(e) => setAnimalRef(e.target.value)} required placeholder={refExample}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg font-mono" />
-              </div>
+              </div>}
+              {isCattle && <div className="col-span-2 sm:col-span-1 row-span-2">
+                <label className="block text-xs font-medium text-gray-700 mb-1">Ear tags * <span className="text-gray-400 font-normal">— one per line</span></label>
+                <textarea value={earTags} onChange={(e) => setEarTags(e.target.value)} rows={4} required placeholder={'UK 123456 700123\nUK 123456 700124'}
+                  className={`w-full px-3 py-2 border rounded-lg font-mono text-sm ${dupTag ? 'border-red-500' : 'border-gray-300'}`} />
+                <p className={`text-xs mt-0.5 ${dupTag ? 'text-red-600' : 'text-gray-500'}`}>{dupTag ? `${dupTag} is listed twice` : `${tags.length} animal${tags.length === 1 ? '' : 's'}`}</p>
+              </div>}
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">Born in *</label>
                 <input value={bornIn} onChange={(e) => { setBornIn(e.target.value); if (rearedIn === bornIn) setRearedIn(e.target.value); }} required
@@ -204,7 +248,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
             </div>
             <p className="text-xs text-amber-800">
               {species === 'Cattle'
-                ? 'Cattle are tracked one by one: register each animal as its own batch, with its ear tag.'
+                ? 'Cattle are tracked one by one (each has its own ear tag and passport), so each animal becomes its own batch. Paste several ear tags to register them all at once with the same details.'
                 : 'Animals from the same flock / herd going to slaughter together can be one batch.'}
               {' '}The ear tag / flock mark and countries are public (they're printed on meat labels by law).
             </p>
@@ -230,6 +274,9 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Quantity *
             </label>
+            {isCattle ? (
+              <p className="px-4 py-3 border border-gray-200 rounded-lg bg-gray-50 text-gray-700">{tags.length} <span className="text-xs text-gray-500">(one per ear tag)</span></p>
+            ) : (
             <input
               type="number"
               value={quantity}
@@ -237,10 +284,10 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
               placeholder={isLivestock ? 'Number of animals' : 'e.g., 50'}
               step={isLivestock ? '1' : 'any'}
               min={isLivestock ? '1' : '0.001'}
-              disabled={isLivestock && species === 'Cattle'}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent disabled:bg-gray-100"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
               required
             />
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -343,10 +390,11 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
 
         <button
           type="submit"
-          disabled={loading}
+          disabled={loading || (isCattle && (!tags.length || !!dupTag))}
           className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed"
         >
-          {loading ? 'Creating Batch (Gasless)...' : 'Create Batch (No ETH Needed!)'}
+          {loading ? (progress || 'Creating Batch (Gasless)...')
+            : isCattle ? `Register ${tags.length || ''} ${tags.length === 1 ? 'animal' : 'animals'} (No ETH Needed!)` : 'Create Batch (No ETH Needed!)'}
         </button>
 
         {onCancel && (
@@ -379,9 +427,17 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
               <p className="text-sm font-semibold text-gray-700 mb-2">
                 Batch Details:
               </p>
+              {createdBatch.list?.length > 1 ? (
+                <div className="text-sm text-gray-600 max-h-40 overflow-y-auto">
+                  <p className="font-semibold">{createdBatch.list.length} animals registered:</p>
+                  {createdBatch.list.map(c => <p key={c.batchId} className="font-mono text-xs">{c.animalRef} → {c.batchId}</p>)}
+                  <p className="text-xs mt-1">Print each animal's QR code from its batch page.</p>
+                </div>
+              ) : (
               <p className="text-sm text-gray-600">
                 <span className="font-semibold">Batch ID:</span> {createdBatch.batchId}
               </p>
+              )}
               <p className="text-sm text-gray-600">
                 <span className="font-semibold">Product:</span> {createdBatch.productName}
               </p>
@@ -418,7 +474,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
                 >
                   📥 Download QR Code
                 </button>
-                <NfcShare url={batchLink(batchId)} compact />
+                <NfcShare url={batchLink(createdBatch.batchId)} compact />
               </div>
             )}
 

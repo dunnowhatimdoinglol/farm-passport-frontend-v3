@@ -357,6 +357,15 @@ function JourneyTimeline({ batchId, shipmentId = null, refreshKey = 0 }) {
               </p>
             </div>
           )}
+          {(madeFrom?.ingredients || batch.allergens?.length > 0) && (
+            <div className="mt-3 bg-white border border-gray-200 rounded-lg p-3 text-sm text-gray-800">
+              {madeFrom?.ingredients && <p><span className="font-semibold">Ingredients:</span> {madeFrom.ingredients}</p>}
+              {batch.allergens?.length > 0 && (
+                <p className="mt-1 text-amber-900"><span className="font-semibold">⚠️ Allergens:</span> {batch.allergens.map(a => <strong key={a} className="mr-1">{a}</strong>)}</p>
+              )}
+              <p className="text-xs text-gray-500 mt-1">As recorded by the maker. Always check with the café if you have an allergy.</p>
+            </div>
+          )}
         </section>
 
         {!full ? (

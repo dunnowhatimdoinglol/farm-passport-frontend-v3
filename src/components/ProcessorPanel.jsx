@@ -1,7 +1,9 @@
 // ProcessorPanel — for approved abattoirs / cutting plants, on the Supply Chain page.
-//   1. Animals coming in (with their Food Chain Information) → confirm they arrived
+//   1. Animals in (with their Food Chain Information) → confirm they arrived, or refuse them (with a reason)
 //   2. Kill sheet: upload the day's kill sheet (CSV) → one carcass per row, recorded on-chain
-//   3. Carcasses & cuts here → cut them into products (weights checked on-chain), send them on, recall
+//   3. Carcasses & cuts, grouped by farm → cut (weights worked out for you, ingredients + allergens),
+//      send one or several products, recall; History keeps everything for recalls
+//   4. Café orders to send: cuts cafés ordered from a farm's meat list, sent from here
 // Everything is sent by Farm Passport (no gas needed); the processor signs in once with its wallet.
 import { useState, useEffect } from 'react';
 import axios from 'axios';
@@ -90,8 +92,11 @@ export default function ProcessorPanel({ account, participants }) {
 
   const load = async () => {
     try {
-      const r = await axios.get(`${API_BASE}/processor/overview`, auth);
-      setData(r.data);
+      const [r, o] = await Promise.all([
+        axios.get(`${API_BASE}/processor/overview`, auth),
+        axios.get(`${API_BASE}/processor/orders`, auth).catch(() => ({ data: { orders: [] } }))
+      ]);
+      setData({ ...r.data, orders: o.data.orders || [] });
     } catch (err) {
       if (err.response?.status === 403 || err.response?.status === 401) { setToken(null); try { sessionStorage.removeItem('fp_processor'); } catch { /* */ } }
       setError(err.response?.data?.error || 'Could not load');
@@ -125,6 +130,26 @@ export default function ProcessorPanel({ account, participants }) {
     }
   };
 
+  // Several calls one after another (e.g. sending 4 products to one café). Stops at the first problem.
+  const postMany = async (key, calls, onProgress) => {
+    setBusy(key); setError(null); setMessage(null);
+    const done = [];
+    try {
+      for (const [i, c] of calls.entries()) {
+        onProgress?.(i);
+        await axios.post(`${API_BASE}${c.path}`, c.body, auth);
+        done.push(c);
+      }
+      setMessage(`${done.length} sent: ${done.map(c => c.label).join(', ')}`);
+    } catch (err) {
+      setError(`${done.length ? `${done.length} sent (${done.map(c => c.label).join(', ')}), then ` : ''}${calls[done.length]?.label}: ${err.response?.data?.error || 'something went wrong'}`);
+    } finally {
+      await load();
+      setBusy(null);
+    }
+    return done.length;
+  };
+
   if (!token) {
     return (
       <div className="bg-white rounded-lg shadow-lg p-6 border-2 border-red-200">
@@ -137,27 +162,52 @@ export default function ProcessorPanel({ account, participants }) {
   }
   if (!data) return <div className="bg-white rounded-lg shadow-lg p-6">⏳ Loading…{error && <p className="text-red-600 text-sm">⚠️ {error}</p>}</div>;
 
+  const ready = data.orders.filter(o => o.ready).length;
   return (
     <div className="space-y-6">
       <div className="bg-red-50 border-2 border-red-200 rounded-lg p-4">
         <p className="font-bold text-red-900">🔪 {data.me.name} · approval no. {data.me.approvalNumber}</p>
-        <p className="text-xs text-red-800">Animals in → kill sheet → carcasses → cutting → send out. Every step is on the blockchain.</p>
+        <p className="text-xs text-red-800">Animals in → kill sheet → carcasses → cutting → café orders. Every step is on the blockchain.</p>
+        {(data.animalsComing.length > 0 || ready > 0) && (
+          <p className="text-sm text-red-900 font-semibold mt-1">
+            {[data.animalsComing.length > 0 && `🐄 ${data.animalsComing.length} deliver${data.animalsComing.length === 1 ? 'y' : 'ies'} of animals on the way`,
+              ready > 0 && `📦 ${ready} café order${ready === 1 ? '' : 's'} ready to send`].filter(Boolean).join(' · ')}
+          </p>
+        )}
       </div>
       {error && <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-red-700 text-sm font-semibold">⚠️ {error}</div>}
       {message && <div className="bg-green-50 border border-green-300 rounded-lg p-3 text-green-700 text-sm font-semibold">✅ {message}</div>}
 
       <AnimalsIn data={data} auth={auth} busy={busy} post={post} />
       <KillSheet post={post} busy={busy} waiting={data.animalsHere} />
-      <MadeHere data={data} post={post} busy={busy} participants={participants} />
+      <MadeHere data={data} post={post} postMany={postMany} busy={busy} participants={participants} />
+      <OrdersToSend data={data} post={post} busy={busy} participants={participants} />
     </div>
   );
 }
+
+const Req = () => <span className="text-red-600 font-bold" title="Required">*</span>;
+const round3 = (x) => Math.round(x * 1000) / 1000;
+const ukDate = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+
+// Why an abattoir turns animals away (the reason goes on the blockchain with the refusal)
+const REFUSE_REASONS = [
+  'No Food Chain Information (FCI)',
+  'FCI incomplete or wrong',
+  "Ear tag / passport doesn't match",
+  'Unfit to travel / welfare concern',
+  'Too dirty to slaughter (clean livestock policy)',
+  'Medicine withdrawal period not finished',
+  'Wrong animals / not booked in',
+  'Other',
+];
 
 // ── 1. Animals arriving / waiting ──
 function AnimalsIn({ data, auth, busy, post }) {
   const [fciOpen, setFciOpen] = useState(null);
   const [fci, setFci] = useState(null);
   const [qty, setQty] = useState({});
+  const [refusing, setRefusing] = useState(null);      // { shipmentId, count, reason, notes }
 
   const viewFci = async (id) => {
     if (fciOpen === id) { setFciOpen(null); return; }
@@ -188,30 +238,83 @@ function AnimalsIn({ data, auth, busy, post }) {
     </div>
   );
 
+  const refuse = async (s) => {
+    const n = Number(refusing.count);
+    const notes = `Refused: ${refusing.reason}${refusing.notes.trim() ? ` — ${refusing.notes.trim()}` : ''}`;
+    const r = await post(`x${s.shipmentId}`, `/processor/shipments/${s.shipmentId}/receive`,
+      { quantityReceived: s.quantitySent - n, quantityRejected: n, notes },
+      n === s.quantitySent ? `Refused ${n} head — they go back on ${s.fromName}'s count` : `${s.quantitySent - n} accepted, ${n} refused`);
+    if (r) setRefusing(null);
+  };
+
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
       <h3 className="text-lg font-bold text-gray-800 mb-1">1. Animals in</h3>
-      <p className="text-sm text-gray-500 mb-3">Confirm animals when they arrive in lairage. Check their Food Chain Information.</p>
+      <p className="text-sm text-gray-500 mb-3">Confirm animals when they arrive in lairage, or refuse them. Check their Food Chain Information.</p>
       {data.animalsComing.length === 0 && data.animalsHere.length === 0 && <p className="text-sm text-gray-500">No animals on the way or waiting.</p>}
       <div className="space-y-3">
-        {data.animalsComing.map(s => (
-          <div key={s.shipmentId} className="border-2 border-blue-200 bg-blue-50 rounded-lg p-3">
-            <p className="font-semibold text-gray-800">{formatQty(s.quantitySent, 'head')} {s.productName} from {s.fromName}</p>
-            <p className="text-xs text-gray-600">{s.species} · <span className="font-mono">{s.animalRef}</span> · delivery #{s.shipmentId}{s.dispatchNotes ? ` · "${s.dispatchNotes}"` : ''}</p>
-            <FciBadge s={s} /><FciView id={s.shipmentId} />
-            <div className="flex gap-2 mt-2 items-center flex-wrap">
-              <span className="text-sm text-gray-600">Arrived:</span>
-              <input type="number" min="0" step="1" max={s.quantitySent} value={qty[s.shipmentId] ?? s.quantitySent}
-                onChange={(e) => setQty({ ...qty, [s.shipmentId]: e.target.value })} className="w-20 px-2 py-1 border border-gray-300 rounded text-sm" />
-              <span className="text-sm text-gray-500">head</span>
-              <button disabled={busy !== null} onClick={() => post(`r${s.shipmentId}`, `/processor/shipments/${s.shipmentId}/receive`,
-                { quantityReceived: Number(qty[s.shipmentId] ?? s.quantitySent) }, 'Arrival recorded')}
-                className="bg-green-600 text-white text-sm font-semibold px-3 py-1.5 rounded hover:bg-green-700 disabled:bg-gray-400">
-                {busy === `r${s.shipmentId}` ? '⛓️ Recording…' : '✅ Confirm arrived'}
-              </button>
+        {data.animalsComing.map(s => {
+          const r = refusing?.shipmentId === s.shipmentId ? refusing : null;
+          const n = Number(r?.count);
+          const refuseOk = r && Number.isInteger(n) && n >= 1 && n <= s.quantitySent && r.reason;
+          return (
+            <div key={s.shipmentId} className="border-2 border-blue-200 bg-blue-50 rounded-lg p-3">
+              <p className="font-semibold text-gray-800">{formatQty(s.quantitySent, 'head')} {s.productName} from {s.fromName}</p>
+              <p className="text-xs text-gray-600">{s.species} · <span className="font-mono">{s.animalRef}</span> · delivery #{s.shipmentId}{s.dispatchNotes ? ` · "${s.dispatchNotes}"` : ''}</p>
+              <FciBadge s={s} /><FciView id={s.shipmentId} />
+              {!r ? (
+                <div className="flex gap-2 mt-2 items-center flex-wrap">
+                  <span className="text-sm text-gray-600">Arrived:</span>
+                  <input type="number" min="0" step="1" max={s.quantitySent} value={qty[s.shipmentId] ?? s.quantitySent}
+                    onChange={(e) => setQty({ ...qty, [s.shipmentId]: e.target.value })} className="w-20 px-2 py-1 border border-gray-300 rounded text-sm" />
+                  <span className="text-sm text-gray-500">head</span>
+                  <button disabled={busy !== null} onClick={() => post(`r${s.shipmentId}`, `/processor/shipments/${s.shipmentId}/receive`,
+                    { quantityReceived: Number(qty[s.shipmentId] ?? s.quantitySent) }, 'Arrival recorded')}
+                    className="bg-green-600 text-white text-sm font-semibold px-3 py-1.5 rounded hover:bg-green-700 disabled:bg-gray-400">
+                    {busy === `r${s.shipmentId}` ? '⛓️ Recording…' : '✅ Confirm arrived'}
+                  </button>
+                  <button disabled={busy !== null} onClick={() => setRefusing({ shipmentId: s.shipmentId, count: String(s.quantitySent), reason: s.fci?.provided ? '' : REFUSE_REASONS[0], notes: '' })}
+                    className="text-sm border border-red-300 text-red-700 px-3 py-1.5 rounded hover:bg-red-50">✋ Refuse…</button>
+                </div>
+              ) : (
+                <div className="mt-2 bg-white border border-red-200 rounded-lg p-3 space-y-2">
+                  <p className="text-sm font-bold text-red-800">✋ Refuse animals from this delivery</p>
+                  <div className="flex gap-3 flex-wrap items-end">
+                    <label className="text-xs font-semibold text-gray-700">How many refused <Req />
+                      <span className="flex items-center gap-1 mt-1 font-normal">
+                        <input type="number" min="1" step="1" max={s.quantitySent} value={r.count} onChange={(e) => setRefusing({ ...r, count: e.target.value })}
+                          className="w-20 px-2 py-1 border border-gray-300 rounded text-sm" />
+                        <span className="text-sm text-gray-500">of {s.quantitySent} head</span>
+                      </span>
+                    </label>
+                    <label className="flex-1 min-w-[14rem] text-xs font-semibold text-gray-700">Reason <Req />
+                      <select value={r.reason} onChange={(e) => setRefusing({ ...r, reason: e.target.value })}
+                        className="mt-1 w-full px-2 py-1.5 border border-gray-300 rounded text-sm bg-white font-normal">
+                        <option value="">Choose…</option>
+                        {REFUSE_REASONS.map(x => <option key={x}>{x}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <input value={r.notes} maxLength={160} onChange={(e) => setRefusing({ ...r, notes: e.target.value })}
+                    placeholder={r.reason === 'Other' ? 'Say what was wrong (required)' : 'More detail (optional), e.g. which ear tag'}
+                    className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm" />
+                  <p className="text-xs text-gray-500">
+                    {Number.isInteger(n) && n > 0 && n < s.quantitySent ? `The other ${s.quantitySent - n} head will be accepted. ` : ''}
+                    Refused animals go back on {s.fromName}'s count, so they can be sent again. The reason is recorded on the blockchain and the farm sees it.
+                  </p>
+                  <div className="flex gap-2 items-center">
+                    <button disabled={busy !== null || !refuseOk || (r.reason === 'Other' && !r.notes.trim())} onClick={() => refuse(s)}
+                      className="bg-red-700 text-white text-sm font-semibold px-3 py-1.5 rounded hover:bg-red-800 disabled:bg-gray-400">
+                      {busy === `x${s.shipmentId}` ? '⛓️ Recording…' : `Refuse ${Number.isInteger(n) && n > 0 ? n : ''} head`}
+                    </button>
+                    <button onClick={() => setRefusing(null)} className="text-sm text-gray-600 hover:underline">Cancel</button>
+                    <span className="text-xs text-gray-400 ml-auto"><Req /> required</span>
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
         {data.animalsHere.map(s => (
           <div key={s.shipmentId} className="border border-gray-200 rounded-lg p-3">
             <p className="font-semibold text-gray-800">{formatQty(s.available, 'head')} {s.productName} in lairage <span className="text-gray-500 font-normal">from {s.fromName}</span></p>
@@ -306,128 +409,313 @@ function KillSheet({ post, busy, waiting }) {
   );
 }
 
-// ── 3. Carcasses and cuts here: cut, send, recall ──
-// Carcasses (from the kill sheet) are cut into products; products are sent on (or, now and then, processed further).
-const Req = () => <span className="text-red-600 font-bold" title="Required">*</span>;
-const round3 = (x) => Math.round(x * 1000) / 1000;
-
-function LeftBar({ b }) {
+// ── 3. Carcasses and cuts here ──
+// Grouped by farm; under each carcass, what was cut from it. Products can be ticked and sent together.
+// "History" keeps everything (also finished and sent batches) so it can still be found and recalled.
+function LeftBar({ b, small = false }) {
   const pct = b.quantity > 0 ? Math.max(0, Math.min(100, (b.remaining / b.quantity) * 100)) : 0;
   return (
     <div className="text-right shrink-0">
-      <p className="font-bold text-sm text-gray-800">{formatQty(b.remaining, b.unit)} left</p>
+      <p className={`font-bold text-gray-800 ${small ? 'text-xs' : 'text-sm'}`}>{formatQty(b.remaining, b.unit)} left</p>
       <p className="text-xs text-gray-500">of {formatQty(b.quantity, b.unit)}</p>
-      <div className="w-28 h-1.5 bg-gray-200 rounded-full mt-1 ml-auto overflow-hidden">
+      <div className={`${small ? 'w-20' : 'w-28'} h-1.5 bg-gray-200 rounded-full mt-1 ml-auto overflow-hidden`}>
         <div className={`h-full ${pct < 5 ? 'bg-amber-500' : 'bg-green-600'}`} style={{ width: `${pct}%` }} />
       </div>
     </div>
   );
 }
 
-function MadeHere({ data, post, busy, participants }) {
-  const [cutFrom, setCutFrom] = useState(null);     // batch being cut / processed
-  const [sendOf, setSendOf] = useState(null);       // { batchId, to, quantity, via, notes }
-  const [showEmpty, setShowEmpty] = useState(false);
-  const visible = data.madeHere.filter(b => showEmpty || b.remaining > 0);
-  const carcasses = visible.filter(b => b.kind === 'Slaughter');
-  const products = visible.filter(b => b.kind !== 'Slaughter');
-  const finished = data.madeHere.filter(b => b.remaining <= 0).length;
+const refOf = (b) => (b.kind === 'Slaughter' ? `Kill no. ${b.lotRef}` : `${b.kind}${b.lotRef ? ` · lot ${b.lotRef}` : ''}`);
 
-  const open = (b, what) => {
-    setCutFrom(what === 'cut' ? b : null);
+function MadeHere({ data, post, postMany, busy, participants }) {
+  const [view, setView] = useState('now');            // now | history
+  const [open, setOpen] = useState(null);             // { batchId, what: 'cut' | 'send' }
+  const [sendOf, setSendOf] = useState(null);         // single send form
+  const [collapsed, setCollapsed] = useState({});     // farm key → true
+  const [picked, setPicked] = useState({});           // batchId → true (send several together)
+  const [bulk, setBulk] = useState(null);             // { to, via, notes, qty: { batchId: '4' } }
+  const [step, setStep] = useState(null);             // bulk progress
+  const [q, setQ] = useState('');
+
+  const all = data.madeHere;
+  const byId = Object.fromEntries(all.map(b => [b.batchId, b]));
+  const live = (b) => b.remaining > 0 && !b.recalled;
+  const canSend = (b) => live(b) && b.kind !== 'Slaughter';
+  const waiting = data.orders.filter(o => !o.ready);
+  const pickedList = Object.keys(picked).filter(id => picked[id] && byId[id] && canSend(byId[id])).map(id => byId[id]);
+
+  // Group by farm → carcasses (each with what was cut from it) + anything from several carcasses / other stock
+  const groups = {};
+  const farmKey = (b) => b.farmAddress || 'mixed';
+  for (const b of all) {
+    const k = farmKey(b);
+    groups[k] = groups[k] || { key: k, farmName: b.farmAddress ? (b.farmName || 'Farm') : 'Several farms', carcasses: [], other: [] };
+  }
+  for (const b of all) if (b.kind === 'Slaughter') groups[farmKey(b)].carcasses.push({ carcass: b, products: [] });
+  for (const b of all) {
+    if (b.kind === 'Slaughter') continue;
+    const g = groups[farmKey(b)];
+    const home = b.carcasses?.length === 1 ? g.carcasses.find(c => c.carcass.batchId === b.carcasses[0]) : null;
+    (home ? home.products : g.other).push(b);
+  }
+  const shown = Object.values(groups).map(g => ({
+    ...g,
+    carcasses: g.carcasses.filter(c => live(c.carcass) || c.products.some(live)).map(c => ({ ...c, products: c.products.filter(live) })),
+    other: g.other.filter(live),
+  })).filter(g => g.carcasses.length || g.other.length).sort((a, b) => a.farmName.localeCompare(b.farmName));
+
+  const openForm = (b, what) => {
+    setOpen({ batchId: b.batchId, what });
     setSendOf(what === 'send' ? { batchId: b.batchId, to: '', quantity: String(b.remaining), via: '', notes: '' } : null);
   };
-
+  const close = () => { setOpen(null); setSendOf(null); };
   const recall = (b) => {
     const reason = window.prompt(`Recall ${b.productName} (${b.batchId}) and everything made from it?\n\nReason:`);
-    if (reason && reason.trim()) post(`x${b.batchId}`, '/processor/recall', { batchId: b.batchId, reason: reason.trim() }, 'Recalled');
+    if (reason && reason.trim()) post(`x${b.batchId}`, '/processor/recall', { batchId: b.batchId, reason: reason.trim() }, `${b.productName} recalled, with everything made from it`);
   };
 
-  // A plain render function (not a nested component) so open forms keep their state and focus
-  const card = (b) => {
-    const isCarcass = b.kind === 'Slaughter';
-    const working = cutFrom?.batchId === b.batchId || sendOf?.batchId === b.batchId;
-    const small = isCarcass && b.remaining > 0 && b.remaining < Math.max(5, b.quantity * 0.05);
+  const forms = (b) => (
+    <>
+      {open?.batchId === b.batchId && open.what === 'cut' && (
+        <CutForm first={b} all={all.filter(live)} data={data} post={post} busy={busy} onClose={close} />
+      )}
+      {open?.batchId === b.batchId && open.what === 'send' && sendOf && (
+        <SendForm b={b} sendOf={sendOf} setSendOf={setSendOf} me={data.me} participants={participants} post={post} busy={busy} onClose={close} />
+      )}
+    </>
+  );
+
+  // A carcass (plain render function, so open forms keep their state and focus)
+  const carcassCard = ({ carcass: b, products }) => {
+    const working = open?.batchId === b.batchId;
+    const finished = !live(b);
+    const small = live(b) && b.remaining < Math.max(5, b.quantity * 0.05);
     return (
-      <div key={b.batchId} className={`border rounded-lg p-3 ${b.recalled ? 'border-red-300 bg-red-50' : working ? 'border-gray-400 shadow-sm' : 'border-gray-200'} ${b.remaining <= 0 ? 'opacity-60' : ''}`}>
-        <div className="flex justify-between gap-3">
-          <div className="min-w-0">
-            <p className="font-semibold text-gray-800">{b.productName} <span className="text-gray-500 font-normal">· {b.farmName || 'several farms'}</span></p>
-            <p className="text-xs text-gray-500">
-              {isCarcass ? `Kill no. ${b.lotRef}` : `${b.kind}${b.lotRef ? ` · lot ${b.lotRef}` : ''}`}
-              {b.grading?.conformation ? ` · grade ${b.grading.conformation}${b.grading.fatClass || ''}` : ''}
-              {b.animalRef ? ` · ${b.animalRef}` : ''}
-              {b.useBy ? ` · use by ${new Date(b.useBy).toLocaleDateString('en-GB')}` : ''}
-            </p>
-            <p className="text-xs text-gray-400 font-mono">{b.batchId}</p>
-            {b.recalled && <p className="text-xs text-red-700 font-semibold">🚨 Recalled{b.recallReason ? `: ${b.recallReason}` : ''}</p>}
-            {b.remaining <= 0 && !b.recalled && <p className="text-xs text-gray-500 font-semibold">✔ All used or sent</p>}
+      <div key={b.batchId} className={`border rounded-lg ${working ? 'border-gray-400 shadow-sm' : 'border-gray-200'} ${b.recalled ? 'border-red-300 bg-red-50' : 'bg-white'}`}>
+        <div className={`p-3 ${finished && !b.recalled ? 'bg-gray-50 rounded-t-lg' : ''}`}>
+          <div className="flex justify-between gap-3">
+            <div className="min-w-0">
+              <p className={`font-semibold ${finished ? 'text-gray-500' : 'text-gray-800'}`}>🥩 {b.productName}
+                <span className="font-normal text-gray-500"> · {refOf(b)}{b.grading?.conformation ? ` · grade ${b.grading.conformation}${b.grading.fatClass || ''}` : ''}</span></p>
+              <p className="text-xs text-gray-500">{b.animalRef ? `${b.animalRef} · ` : ''}<span className="font-mono text-gray-400">{b.batchId}</span></p>
+              {b.recalled && <p className="text-xs text-red-700 font-semibold">🚨 Recalled{b.recallReason ? `: ${b.recallReason}` : ''}</p>}
+            </div>
+            {finished ? <p className="text-xs text-gray-500 font-semibold shrink-0">{b.recalled ? '' : '✔ All cut'}</p> : <LeftBar b={b} />}
           </div>
-          <LeftBar b={b} />
+          {small && !working && <p className="text-xs text-amber-700 mt-2">Only {formatQty(b.remaining, b.unit)} left: cut it into trim or mince, or include it as waste the next time you cut.</p>}
+          {live(b) && !working && (
+            <div className="flex gap-2 mt-3 items-center flex-wrap">
+              <button onClick={() => openForm(b, 'cut')} className="bg-red-700 text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-red-800">🔪 Cut into products</button>
+              <button onClick={() => openForm(b, 'send')} className="text-sm border border-gray-300 px-3 py-1.5 rounded-lg hover:bg-gray-50">🚚 Send whole</button>
+              <button onClick={() => recall(b)} className="text-xs text-gray-500 hover:text-red-700 hover:underline ml-auto">Recall…</button>
+            </div>
+          )}
+          {finished && !b.recalled && (
+            <button onClick={() => recall(b)} className="text-xs text-gray-500 hover:text-red-700 hover:underline mt-1">Recall this carcass and everything cut from it…</button>
+          )}
+          {forms(b)}
         </div>
-
-        {small && !working && !b.recalled && (
-          <p className="text-xs text-amber-700 mt-2">Only {formatQty(b.remaining, b.unit)} left: cut it into trim or mince, or include it as waste the next time you cut.</p>
-        )}
-
-        {b.remaining > 0 && !b.recalled && !working && (
-          <div className="flex gap-2 mt-3 items-center flex-wrap">
-            {isCarcass ? (
-              <>
-                <button onClick={() => open(b, 'cut')} className="bg-red-700 text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-red-800">🔪 Cut into products</button>
-                <button onClick={() => open(b, 'send')} className="text-sm border border-gray-300 px-3 py-1.5 rounded-lg hover:bg-gray-50">🚚 Send whole</button>
-              </>
-            ) : (
-              <>
-                <button onClick={() => open(b, 'send')} className="bg-green-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700">🚚 Send</button>
-                <button onClick={() => open(b, 'cut')} className="text-sm border border-gray-300 px-3 py-1.5 rounded-lg hover:bg-gray-50" title="e.g. turn steaks or trim into mince, burgers or cured meat">
-                  ⚙️ Process further</button>
-              </>
-            )}
-            <button onClick={() => recall(b)} className="text-xs text-gray-500 hover:text-red-700 hover:underline ml-auto">Recall…</button>
+        {products.length > 0 && (
+          <div className="border-t border-gray-100 pl-4 pr-3 py-2 space-y-2 bg-gray-50/50 rounded-b-lg">
+            <p className="text-xs font-semibold text-gray-500">Cut from this carcass</p>
+            {products.map(productCard)}
           </div>
-        )}
-
-        {cutFrom?.batchId === b.batchId && (
-          <CutForm first={b} all={data.madeHere.filter(x => x.remaining > 0 && !x.recalled)} post={post} busy={busy} onClose={() => setCutFrom(null)} />
-        )}
-        {sendOf?.batchId === b.batchId && (
-          <SendForm b={b} sendOf={sendOf} setSendOf={setSendOf} me={data.me} participants={participants} post={post} busy={busy} />
         )}
       </div>
     );
   };
 
+  const productCard = (b) => {
+    const working = open?.batchId === b.batchId;
+    return (
+      <div key={b.batchId} className={`border rounded-lg p-2.5 bg-white ${working ? 'border-gray-400 shadow-sm' : picked[b.batchId] ? 'border-green-500 ring-1 ring-green-500' : 'border-gray-200'}`}>
+        <div className="flex gap-2.5">
+          {canSend(b) && (
+            <input type="checkbox" checked={!!picked[b.batchId]} onChange={(e) => setPicked({ ...picked, [b.batchId]: e.target.checked })}
+              className="mt-1 h-4 w-4 accent-green-600 shrink-0" aria-label={`Select ${b.productName} to send`} />
+          )}
+          <div className="flex-1 min-w-0 flex justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-semibold text-gray-800 text-sm">{b.productName}</p>
+              <p className="text-xs text-gray-500">{refOf(b)}{b.useBy ? ` · use by ${ukDate(b.useBy)}` : ''} · <span className="font-mono text-gray-400">{b.batchId}</span></p>
+              {b.allergens?.length > 0 && <p className="text-xs text-amber-800">⚠️ Contains: {b.allergens.join(', ')}</p>}
+            </div>
+            <LeftBar b={b} small />
+          </div>
+        </div>
+        {!working && (
+          <div className="flex gap-2 mt-2 items-center flex-wrap pl-6">
+            <button onClick={() => openForm(b, 'send')} className="bg-green-600 text-white text-xs font-semibold px-2.5 py-1 rounded-lg hover:bg-green-700">🚚 Send</button>
+            <button onClick={() => openForm(b, 'cut')} className="text-xs border border-gray-300 px-2.5 py-1 rounded-lg hover:bg-gray-50" title="e.g. turn steaks or trim into mince, burgers or cured meat">⚙️ Process further</button>
+            <button onClick={() => recall(b)} className="text-xs text-gray-500 hover:text-red-700 hover:underline ml-auto">Recall…</button>
+          </div>
+        )}
+        {forms(b)}
+      </div>
+    );
+  };
+
+  const sendSelected = async () => {
+    const calls = pickedList.map(b => ({
+      path: '/processor/dispatch',
+      body: { batchId: b.batchId, to: bulk.to, quantity: Number(bulk.qty[b.batchId] ?? b.remaining), via: bulk.via || undefined, notes: bulk.notes },
+      label: `${b.productName} ${formatQty(Number(bulk.qty[b.batchId] ?? b.remaining), b.unit)}`
+    }));
+    const n = await postMany('bulk', calls, setStep);
+    setStep(null);
+    if (n === calls.length) { setBulk(null); setPicked({}); }
+    else setPicked(Object.fromEntries(pickedList.slice(n).map(b => [b.batchId, true])));
+  };
+
+  // History: everything made here, newest first, searchable
+  const needle = q.trim().toLowerCase();
+  const hit = (b) => !!b && [b.productName, b.lotRef, b.animalRef, b.batchId, b.farmName].some(v => String(v || '').toLowerCase().includes(needle));
+  // A kill number or ear tag also finds everything cut from that carcass
+  const history = [...all].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .filter(b => !needle || hit(b) || (b.carcasses || []).some(id => hit(byId[id])));
+
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
       <div className="flex justify-between items-center mb-1 flex-wrap gap-2">
-        <h3 className="text-lg font-bold text-gray-800">3. Carcasses & cuts here</h3>
-        {finished > 0 && (
-          <label className="text-xs text-gray-500 flex items-center gap-1">
-            <input type="checkbox" checked={showEmpty} onChange={(e) => setShowEmpty(e.target.checked)} /> show {finished} finished
-          </label>
-        )}
+        <h3 className="text-lg font-bold text-gray-800">3. Carcasses & cuts</h3>
+        <div className="flex text-xs border border-gray-300 rounded-lg overflow-hidden">
+          {[['now', 'Here now'], ['history', `📜 History (${all.length})`]].map(([k, label]) => (
+            <button key={k} onClick={() => setView(k)} className={`px-3 py-1.5 ${view === k ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}>{label}</button>
+          ))}
+        </div>
       </div>
-      <p className="text-sm text-gray-500 mb-4">Cut each carcass into products, then send the products back to the farm or on to cafés.</p>
-      {visible.length === 0 && <p className="text-sm text-gray-500">Nothing here yet. Record a kill sheet first.</p>}
 
-      {carcasses.length > 0 && (
-        <div className="mb-5">
-          <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">🥩 Carcasses ({carcasses.length})</p>
-          <div className="space-y-3">{carcasses.map(card)}</div>
-        </div>
-      )}
-      {products.length > 0 && (
-        <div>
-          <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">📦 Products ready to send ({products.length})</p>
-          <div className="space-y-3">{products.map(card)}</div>
-        </div>
+      {view === 'history' ? (
+        <>
+          <p className="text-sm text-gray-500 mb-3">Everything cut or made here, including what's been used up or sent. Recalling anything also recalls what was made from it, wherever it is now.</p>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search: kill no., ear tag, product, farm or batch ID (a kill no. finds its cuts too)"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm mb-3" />
+          {history.length === 0 && <p className="text-sm text-gray-500">Nothing matches.</p>}
+          <div className="divide-y divide-gray-100">
+            {history.map(b => (
+              <div key={b.batchId} className="py-2 flex justify-between gap-3 items-start">
+                <div className="min-w-0 text-sm">
+                  <p className="font-semibold text-gray-800">{b.kind === 'Slaughter' ? '🥩 ' : ''}{b.productName} <span className="font-normal text-gray-500">· {b.farmName || 'several farms'}</span></p>
+                  <p className="text-xs text-gray-500">{refOf(b)}{b.animalRef ? ` · ${b.animalRef}` : ''} · made {ukDate(b.createdAt)} · <span className="font-mono">{b.batchId}</span></p>
+                  {b.parents?.length > 0 && b.kind !== 'Slaughter' && (
+                    <p className="text-xs text-gray-400">from {b.parents.map(id => byId[id] ? `${byId[id].productName}${byId[id].lotRef ? ` (${byId[id].lotRef})` : ''}` : id).join(' + ')}</p>
+                  )}
+                </div>
+                <div className="text-right shrink-0 text-xs">
+                  {b.recalled ? <p className="text-red-700 font-semibold">🚨 Recalled</p>
+                    : <p className={b.remaining > 0 ? 'text-gray-800 font-semibold' : 'text-gray-500'}>{b.remaining > 0 ? `${formatQty(b.remaining, b.unit)} left` : 'all used / sent'}</p>}
+                  {!b.recalled && <button onClick={() => recall(b)} disabled={busy !== null} className="text-gray-500 hover:text-red-700 hover:underline">Recall…</button>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-gray-500 mb-4">Cut each carcass into products, then send them to cafés or back to the farm. Tick several products to send them together.</p>
+          {shown.length === 0 && <p className="text-sm text-gray-500">Nothing here right now. Record a kill sheet first{all.length ? ', or look in History' : ''}.</p>}
+          <div className="space-y-4">
+            {shown.map(g => {
+              const pre = waiting.filter(o => o.farmerAddress === g.key);
+              const nCarc = g.carcasses.filter(c => live(c.carcass)).length;
+              const nProd = g.carcasses.reduce((n, c) => n + c.products.length, 0) + g.other.length;
+              return (
+                <div key={g.key} className="border border-gray-300 rounded-xl overflow-hidden">
+                  <button onClick={() => setCollapsed({ ...collapsed, [g.key]: !collapsed[g.key] })}
+                    className="w-full flex justify-between items-center gap-2 px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-left">
+                    <span className="font-bold text-gray-800">{collapsed[g.key] ? '▸' : '▾'} {g.farmName}</span>
+                    <span className="text-xs text-gray-600">
+                      {[nCarc && `${nCarc} carcass${nCarc === 1 ? '' : 'es'}`, nProd && `${nProd} product${nProd === 1 ? '' : 's'}`, pre.length && `📋 ${pre.length} to cut to order`].filter(Boolean).join(' · ')}
+                    </span>
+                  </button>
+                  {!collapsed[g.key] && (
+                    <div className="p-3 space-y-3">
+                      {pre.length > 0 && (
+                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-xs text-amber-900">
+                          <p className="font-semibold">📋 Cut to order for {g.farmName}:</p>
+                          <p>{pre.map(o => `${o.productName} ${formatQty(o.suggestion.shortBy, o.unit)}${o.suggestion.shortBy < o.quantity ? ' more' : ''} (${o.restaurantName}${o.neededUntil ? `, by ${ukDate(o.neededUntil)}` : ''})`).join(' · ')}</p>
+                        </div>
+                      )}
+                      {g.carcasses.map(carcassCard)}
+                      {g.other.length > 0 && (
+                        <div className="space-y-2">
+                          <p className="text-xs font-semibold text-gray-500">From several carcasses or other stock</p>
+                          {g.other.map(productCard)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Send several together */}
+          {pickedList.length > 0 && (
+            <div className="sticky bottom-2 mt-4 bg-white border-2 border-green-600 rounded-xl shadow-lg p-3 space-y-3">
+              <div className="flex justify-between items-center gap-2 flex-wrap">
+                <p className="text-sm font-bold text-gray-800">
+                  {pickedList.length} selected · {formatQty(round3(pickedList.reduce((n, b) => n + Number(bulk?.qty[b.batchId] ?? b.remaining), 0)), pickedList[0].unit)}
+                </p>
+                <div className="flex gap-2">
+                  {!bulk && <button onClick={() => setBulk({ to: '', via: '', notes: '', qty: {} })} className="bg-green-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700">🚚 Send selected</button>}
+                  <button onClick={() => { setPicked({}); setBulk(null); }} className="text-sm text-gray-600 hover:underline">Clear</button>
+                </div>
+              </div>
+              {bulk && (
+                <>
+                  <div className="space-y-1">
+                    {pickedList.map(b => {
+                      const v = bulk.qty[b.batchId] ?? String(b.remaining);
+                      const bad = !(Number(v) > 0) || Number(v) > b.remaining;
+                      return (
+                        <div key={b.batchId} className="flex items-center gap-2 text-sm flex-wrap">
+                          <span className="flex-1 min-w-[10rem]">{b.productName} <span className="text-xs text-gray-500">{b.farmName} · {formatQty(b.remaining, b.unit)} left</span></span>
+                          <input type="number" step="any" min="0.001" max={b.remaining} value={v}
+                            onChange={(e) => setBulk({ ...bulk, qty: { ...bulk.qty, [b.batchId]: e.target.value } })}
+                            className={`w-24 px-2 py-1 border rounded ${bad ? 'border-red-500 bg-red-50' : 'border-gray-300'}`} />
+                          <span className="text-gray-500">{b.unit}</span>
+                          {step !== null && busy === 'bulk' && pickedList.indexOf(b) === step && <span className="text-xs text-gray-500">⛓️ sending…</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="flex gap-2 flex-wrap">
+                    <label className="flex-1 min-w-[12rem] text-xs font-semibold text-gray-700">Send all to <Req />
+                      <select value={bulk.to} onChange={(e) => setBulk({ ...bulk, to: e.target.value })} className="mt-1 w-full px-2 py-1.5 border border-gray-300 rounded bg-white text-sm font-normal">
+                        <option value="">Choose…</option>
+                        {participants.filter(p => p.address !== data.me.address).map(p => <option key={p.address} value={p.address}>{p.name} ({p.role === 'farm' ? 'farm' : p.role === 'restaurant' ? 'restaurant' : p.processorApproval ? 'processor' : 'depot'})</option>)}
+                      </select>
+                    </label>
+                    <label className="flex-1 min-w-[10rem] text-xs font-semibold text-gray-700">Delivery
+                      <select value={bulk.via} onChange={(e) => setBulk({ ...bulk, via: e.target.value })} className="mt-1 w-full px-2 py-1.5 border border-gray-300 rounded bg-white text-sm font-normal">
+                        <option value="">Direct (own delivery)</option>
+                        {participants.filter(p => p.role === 'handler' && p.address !== bulk.to && p.address !== data.me.address).map(p => <option key={p.address} value={p.address}>via {p.name}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <input value={bulk.notes} maxLength={280} onChange={(e) => setBulk({ ...bulk, notes: e.target.value })} placeholder="Notes for every box (optional), e.g. vac-packed, 2 crates"
+                    className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm" />
+                  <p className="text-xs text-gray-500">Each product goes as its own delivery, so each one keeps its own trace back to the farm.</p>
+                  <div className="flex gap-2 items-center">
+                    <button disabled={busy !== null || !bulk.to || pickedList.some(b => { const v = Number(bulk.qty[b.batchId] ?? b.remaining); return !(v > 0) || v > b.remaining; })}
+                      onClick={sendSelected} className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
+                      {busy === 'bulk' ? `⛓️ Sending ${(step ?? 0) + 1} of ${pickedList.length}…` : `🚚 Send ${pickedList.length} deliveries`}
+                    </button>
+                    <button onClick={() => setBulk(null)} className="text-sm text-gray-600 hover:underline">Back</button>
+                    <span className="text-xs text-gray-400 ml-auto"><Req /> required</span>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
 }
 
-function SendForm({ b, sendOf, setSendOf, me, participants, post, busy }) {
+function SendForm({ b, sendOf, setSendOf, me, participants, post, busy, onClose }) {
   const qty = Number(sendOf.quantity);
   const missing = [!sendOf.to && 'who it goes to', !(qty > 0) && 'how much', qty > b.remaining && `no more than ${formatQty(b.remaining, b.unit)}`].filter(Boolean);
   return (
@@ -461,67 +749,97 @@ function SendForm({ b, sendOf, setSendOf, me, participants, post, busy }) {
       {missing.length > 0 && <p className="text-xs text-gray-500">Still needed: {missing.join(', ')}</p>}
       <div className="flex gap-2 items-center">
         <button disabled={busy !== null || missing.length > 0} onClick={async () => {
-          const r = await post(`s${b.batchId}`, '/processor/dispatch', { ...sendOf, quantity: qty, via: sendOf.via || undefined }, 'Sent');
-          if (r) setSendOf(null);
+          const r = await post(`s${b.batchId}`, '/processor/dispatch', { ...sendOf, quantity: qty, via: sendOf.via || undefined }, `${b.productName} sent`);
+          if (r) onClose();
         }} className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
           {busy === `s${b.batchId}` ? '⛓️ Recording…' : '🚚 Send'}
         </button>
-        <button onClick={() => setSendOf(null)} className="text-sm text-gray-600 hover:underline">Cancel</button>
+        <button onClick={onClose} className="text-sm text-gray-600 hover:underline">Cancel</button>
         <span className="text-xs text-gray-400 ml-auto"><Req /> required</span>
       </div>
     </div>
   );
 }
 
+// ── Cutting / processing form ──
+// You fill in what you USED, any WASTE and any ADDED ingredients; the last product's weight works itself out
+// (used + added − waste − the other products). Type over it if you weighed it.
 const KINDS = {
   Cutting: 'Cutting (steaks, joints, diced)',
   Mincing: 'Mincing',
   'Sausage making': 'Sausages / burgers',
   Curing: 'Curing (bacon, ham)',
+  Marinating: 'Marinating / seasoning',
   Packing: 'Packing only',
 };
+const ADD_HINT = {
+  Cutting: 'e.g. a marinade or seasoning rub',
+  Mincing: 'e.g. seasoning',
+  'Sausage making': 'e.g. rusk, water, salt, herbs',
+  Curing: 'e.g. salt, sugar, cure (sodium nitrite)',
+  Marinating: 'e.g. oil, garlic, herbs',
+  Packing: 'e.g. a sauce or glaze',
+};
+const blankOut = () => ({ productName: '', quantity: '', useBy: '', touched: false });
 
-function CutForm({ first, all, post, busy, onClose }) {
+function CutForm({ first, all, data, post, busy, onClose }) {
   const isCarcass = first.kind === 'Slaughter';
   const [kind, setKind] = useState(isCarcass ? 'Cutting' : 'Mincing');
   const [inputs, setInputs] = useState([{ batchId: first.batchId, quantity: '' }]);
-  const [outputs, setOutputs] = useState([{ productName: '', quantity: '', useBy: '' }]);
+  const [outputs, setOutputs] = useState([blankOut()]);
   const [waste, setWaste] = useState('');
+  const [showAdded, setShowAdded] = useState(false);
   const [added, setAdded] = useState('');
+  const [ingredients, setIngredients] = useState('');
+  const [allergens, setAllergens] = useState([]);
   const [lotRef, setLotRef] = useState('');
   const [notes, setNotes] = useState('');
   const [mixing, setMixing] = useState(false);
   const unit = first.unit;
-  const suggestions = CUTS[first.species] || [];
-  const usesIngredients = kind === 'Sausage making' || kind === 'Curing';
+  const addedOpen = kind !== 'Cutting' || showAdded;
+
+  // Cut names: anything pre-ordered from this farm first, then the usual cuts for the animal
+  const ordered = data.orders.filter(o => o.farmerAddress === first.farmAddress && !o.ready).map(o => o.productName);
+  const suggestions = [...new Set([...ordered, ...(CUTS[first.species] || [])])];
 
   const n = (v) => Number(v) || 0;
   const batchOf = (id) => all.find(x => x.batchId === id) || first;
   const usedTotal = round3(inputs.reduce((t, i) => t + n(i.quantity), 0));
-  const madeTotal = round3(outputs.reduce((t, o) => t + n(o.quantity), 0));
-  const addedQty = usesIngredients ? n(added) : 0;
-  const balance = round3(usedTotal + addedQty - madeTotal - n(waste));
-  const setIn = (i, k, v) => setInputs(inputs.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
-  const setOut = (i, k, v) => setOutputs(outputs.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
-  const others = all.filter(b => b.unit === unit && !inputs.some(i => i.batchId === b.batchId));
+  const addedQty = addedOpen ? n(added) : 0;
+  const available = round3(usedTotal + addedQty - n(waste));
+  const last = outputs.length - 1;
+  const autoIdx = !outputs[last].touched && outputs.slice(0, last).every(o => o.touched) ? last : null;
+  const manualSum = round3(outputs.reduce((t, o, k) => t + (k === autoIdx ? 0 : n(o.quantity)), 0));
+  const autoVal = autoIdx !== null ? round3(available - manualSum) : null;
+  const weightOf = (k) => (k === autoIdx ? Math.max(0, autoVal) : n(outputs[k].quantity));
+  const madeTotal = round3(outputs.reduce((t, _, k) => t + weightOf(k), 0));
+  const balance = round3(available - madeTotal);
 
-  // What still has to be filled in before it can be recorded
+  const setIn = (i, k, v) => setInputs(inputs.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
+  const setOut = (i, k, v) => setOutputs(outputs.map((x, j) => (j === i ? { ...x, [k]: v, ...(k === 'quantity' ? { touched: true } : {}) } : x)));
+  // A new product takes whatever is left; the ones above keep what you typed (an auto one is cleared for you to fill in)
+  const addOut = () => setOutputs([...outputs.map(o => (o.touched ? o : { ...o, touched: true, quantity: '' })), { ...blankOut(), useBy: outputs[last].useBy }]);
+  const others = all.filter(b => b.unit === unit && !inputs.some(i => i.batchId === b.batchId));
+  const toggleAllergen = (a) => setAllergens(allergens.includes(a) ? allergens.filter(x => x !== a) : [...allergens, a]);
+
   const overUsed = inputs.find(i => n(i.quantity) > batchOf(i.batchId).remaining);
-  const filledOutputs = outputs.filter(o => o.productName.trim() || n(o.quantity) > 0 || o.useBy);
   const missing = [
     usedTotal <= 0 && 'how much you used',
     overUsed && `${batchOf(overUsed.batchId).productName} only has ${formatQty(batchOf(overUsed.batchId).remaining, unit)} left`,
-    (filledOutputs.length === 0 || filledOutputs.some(o => !o.productName.trim())) && 'a product name',
-    (filledOutputs.length === 0 || filledOutputs.some(o => !(n(o.quantity) > 0))) && 'each product\'s weight',
-    (filledOutputs.length === 0 || filledOutputs.some(o => !o.useBy)) && 'each product\'s use-by date',
-    usedTotal > 0 && madeTotal > 0 && balance !== 0 && 'the weights to balance',
+    outputs.some(o => !o.productName.trim()) && 'a name for each product',
+    usedTotal > 0 && outputs.some((_, k) => !(weightOf(k) > 0)) && 'a weight for each product',
+    outputs.some(o => !o.useBy) && 'a use-by date for each product',
+    usedTotal > 0 && balance !== 0 && 'the weights to add up',
+    (addedQty > 0 || allergens.length > 0) && !ingredients.trim() && 'the ingredients list',
   ].filter(Boolean);
 
   const submit = async () => {
     const r = await post('cut', '/processor/process', {
       kind, lotRef, notes, waste: n(waste), added: addedQty,
+      ingredients: addedOpen && (addedQty > 0 || ingredients.trim()) ? ingredients.trim() : undefined,
+      allergens: addedOpen ? allergens : [],
       inputs: inputs.filter(i => n(i.quantity) > 0).map(i => ({ batchId: i.batchId, quantity: n(i.quantity) })),
-      outputs: filledOutputs.map(o => ({ productName: o.productName.trim(), quantity: n(o.quantity), useBy: o.useBy || undefined }))
+      outputs: outputs.map((o, k) => ({ productName: o.productName.trim(), quantity: weightOf(k), useBy: o.useBy }))
     }, (d) => `${d.batches.length} product${d.batches.length === 1 ? '' : 's'} made: ${d.batches.map(b => `${b.productName} ${b.quantity} ${b.unit}`).join(', ')}`);
     if (r) onClose();
   };
@@ -551,7 +869,7 @@ function CutForm({ first, all, post, busy, onClose }) {
             <div key={i.batchId} className="flex gap-2 items-center text-sm mb-1 flex-wrap">
               <span className="flex-1 min-w-[10rem]">{b.productName} <span className="text-xs text-gray-500">{b.lotRef || b.batchId} · {formatQty(b.remaining, unit)} left</span></span>
               <input type="number" step="any" min="0" max={b.remaining} value={i.quantity} placeholder={`up to ${b.remaining}`} onChange={(e) => setIn(k, 'quantity', e.target.value)}
-                className={`w-28 px-2 py-1 border rounded ${over ? 'border-red-500 bg-red-50' : 'border-gray-300'}`} />
+                className={`w-28 px-2 py-1 border rounded ${over ? 'border-red-500 bg-red-50' : 'border-gray-300'}`} aria-label="Weight used (required)" />
               <span className="text-gray-500">{unit}</span>
               <button onClick={() => setIn(k, 'quantity', String(b.remaining))} className="text-xs text-blue-600 hover:underline">use all</button>
               {k > 0 && <button onClick={() => setInputs(inputs.filter((_, j) => j !== k))} className="text-xs text-red-600" aria-label="Remove">✕</button>}
@@ -562,77 +880,104 @@ function CutForm({ first, all, post, busy, onClose }) {
           <select value="" onChange={(e) => { const b = all.find(x => x.batchId === e.target.value); if (b) setInputs([...inputs, { batchId: b.batchId, quantity: '' }]); }}
             className="text-xs px-2 py-1 border border-gray-300 rounded bg-white mt-1">
             <option value="">Choose another carcass / batch to mix in…</option>
-            {others.map(b => <option key={b.batchId} value={b.batchId}>{b.productName} · {b.lotRef || b.batchId} · {formatQty(b.remaining, unit)} left</option>)}
+            {others.map(b => <option key={b.batchId} value={b.batchId}>{b.productName} · {b.farmName || ''} · {b.lotRef || b.batchId} · {formatQty(b.remaining, unit)} left</option>)}
           </select>
         ) : (
           <button onClick={() => setMixing(true)} className="text-xs text-blue-600 hover:underline mt-1">+ Mixing in another carcass or batch? (e.g. for mince)</button>
         ))}
       </div>
 
-      <div className="bg-white border border-gray-200 rounded-lg p-3">
-        <p className="text-sm font-bold text-gray-800">2. What did you make? <Req /></p>
-        <p className="text-xs text-gray-500 mb-2">Each product becomes its own batch that cafés can order, traced back to {first.farmName || 'the farm'}.</p>
-        <div className="hidden sm:flex gap-2 text-xs font-semibold text-gray-600 mb-1">
-          <span className="flex-1 min-w-[10rem]">Product <Req /></span><span className="w-32">Weight <Req /></span><span className="w-36">Use by <Req /></span><span className="w-4" />
-        </div>
-        {outputs.map((o, k) => (
-          <div key={k} className="flex gap-2 items-center text-sm mb-2 flex-wrap">
-            <input list="fp-cuts" value={o.productName} onChange={(e) => setOut(k, 'productName', e.target.value)} maxLength={100} placeholder="e.g. Sirloin steak"
-              className="flex-1 min-w-[10rem] px-2 py-1 border border-gray-300 rounded" aria-label="Product name (required)" />
-            <span className="w-32 flex items-center gap-1">
-              <input type="number" step="any" min="0" value={o.quantity} onChange={(e) => setOut(k, 'quantity', e.target.value)} placeholder="0.0"
-                className="w-24 px-2 py-1 border border-gray-300 rounded" aria-label="Weight (required)" />
-              <span className="text-gray-500">{unit}</span>
-            </span>
-            <input type="date" min={today()} value={o.useBy} onChange={(e) => setOut(k, 'useBy', e.target.value)}
-              className="w-36 px-1 py-1 border border-gray-300 rounded text-sm" aria-label="Use by (required)" />
-            <span className="w-4">{outputs.length > 1 && <button onClick={() => setOutputs(outputs.filter((_, j) => j !== k))} className="text-xs text-red-600" aria-label="Remove product">✕</button>}</span>
+      <div className="bg-white border border-gray-200 rounded-lg p-3 space-y-2">
+        <p className="text-sm font-bold text-gray-800">2. Waste{addedOpen ? ' and added ingredients' : ''}</p>
+        <label className="block text-sm">Waste (bone, fat, trim, drip loss) <input type="number" step="any" min="0" value={waste} onChange={(e) => setWaste(e.target.value)} placeholder="0" className="w-20 px-2 py-1 border border-gray-300 rounded" /> {unit}</label>
+        {!addedOpen ? (
+          <button onClick={() => setShowAdded(true)} className="text-xs text-blue-600 hover:underline">+ Added anything? ({ADD_HINT.Cutting})</button>
+        ) : (
+          <div className="border-t border-gray-100 pt-2 space-y-2">
+            <label className="block text-sm">Added ingredients <input type="number" step="any" min="0" value={added} onChange={(e) => setAdded(e.target.value)} placeholder="0" className="w-20 px-2 py-1 border border-gray-300 rounded" /> {unit}
+              <span className="text-xs text-gray-500"> ({ADD_HINT[kind]})</span></label>
+            <label className="block text-xs font-semibold text-gray-700">Ingredients {(addedQty > 0 || allergens.length > 0) && <Req />}
+              <textarea value={ingredients} onChange={(e) => setIngredients(e.target.value)} maxLength={500} rows={2}
+                placeholder="As on the label, biggest first, e.g. Beef (90%), rusk (wheat flour, salt), water, black pepper"
+                className="mt-1 w-full px-2 py-1 border border-gray-300 rounded text-sm font-normal" />
+            </label>
+            <div>
+              <p className="text-xs font-semibold text-gray-700">Allergens it contains <span className="font-normal text-gray-500">(tick all that apply; these are written on the blockchain)</span></p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-0.5 mt-1">
+                {(data.allergenList || []).map(a => (
+                  <label key={a} className="text-xs flex items-center gap-1.5">
+                    <input type="checkbox" checked={allergens.includes(a)} onChange={() => toggleAllergen(a)} className="accent-amber-600" /> {a}
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-gray-500 mt-1">Rusk and breadcrumbs contain gluten; many cures and sausage mixes contain sulphites. Check each supplier's label.</p>
+            </div>
           </div>
-        ))}
-        <datalist id="fp-cuts">{suggestions.map(c => <option key={c} value={c} />)}</datalist>
-        <button onClick={() => setOutputs([...outputs, { productName: '', quantity: '', useBy: outputs[outputs.length - 1]?.useBy || '' }])} className="text-xs text-blue-600 hover:underline">+ another product</button>
+        )}
       </div>
 
-      <div className="bg-white border border-gray-200 rounded-lg p-3 space-y-2">
-        <p className="text-sm font-bold text-gray-800">3. Waste and details</p>
-        <div className="flex gap-4 flex-wrap text-sm items-center">
-          <label>Waste (bone, fat, trim, drip loss) <input type="number" step="any" min="0" value={waste} onChange={(e) => setWaste(e.target.value)} placeholder="0" className="w-20 px-2 py-1 border border-gray-300 rounded" /> {unit}</label>
-          {usesIngredients && (
-            <label>Added ingredients (rusk, salt…) <input type="number" step="any" min="0" value={added} onChange={(e) => setAdded(e.target.value)} placeholder="0" className="w-20 px-2 py-1 border border-gray-300 rounded" /> {unit}</label>
-          )}
+      <div className="bg-white border border-gray-200 rounded-lg p-3">
+        <p className="text-sm font-bold text-gray-800">3. What did you make? <Req /></p>
+        <p className="text-xs text-gray-500 mb-2">The last product's weight fills itself in with what's left. Type over it if you weighed it.</p>
+        <div className="hidden sm:flex gap-2 text-xs font-semibold text-gray-600 mb-1">
+          <span className="flex-1 min-w-[10rem]">Product <Req /></span><span className="w-36">Weight <Req /></span><span className="w-36">Use by <Req /></span><span className="w-4" />
         </div>
-        <div className="flex gap-2 flex-wrap">
-          <input value={lotRef} onChange={(e) => setLotRef(e.target.value)} maxLength={64} placeholder="Lot code (optional)" className="w-40 px-2 py-1 border border-gray-300 rounded text-sm" />
-          <input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={280} placeholder="Public notes (optional), e.g. dry-aged 21 days" className="flex-1 min-w-[12rem] px-2 py-1 border border-gray-300 rounded text-sm" />
-        </div>
+        {outputs.map((o, k) => {
+          const auto = k === autoIdx;
+          return (
+            <div key={k} className="flex gap-2 items-center text-sm mb-2 flex-wrap">
+              <input list="fp-cuts" value={o.productName} onChange={(e) => setOut(k, 'productName', e.target.value)} maxLength={100} placeholder="e.g. Sirloin steak"
+                className="flex-1 min-w-[10rem] px-2 py-1 border border-gray-300 rounded" aria-label="Product name (required)" />
+              <span className="w-36 flex items-center gap-1">
+                <input type="number" step="any" min="0" value={auto ? (usedTotal > 0 ? String(Math.max(0, autoVal)) : '') : o.quantity}
+                  onChange={(e) => setOut(k, 'quantity', e.target.value)} placeholder="0.0"
+                  className={`w-24 px-2 py-1 border rounded ${auto && usedTotal > 0 ? 'border-green-400 bg-green-50' : 'border-gray-300'}`} aria-label="Weight (required)" />
+                <span className="text-gray-500">{unit}</span>
+                {auto && usedTotal > 0 && <span className="text-[10px] font-semibold text-green-700 uppercase">auto</span>}
+              </span>
+              <input type="date" min={today()} value={o.useBy} onChange={(e) => setOut(k, 'useBy', e.target.value)}
+                className="w-36 px-1 py-1 border border-gray-300 rounded text-sm" aria-label="Use by (required)" />
+              <span className="w-4">{outputs.length > 1 && <button onClick={() => setOutputs(outputs.filter((_, j) => j !== k))} className="text-xs text-red-600" aria-label="Remove product">✕</button>}</span>
+              {k === last && !auto && o.touched && autoIdx === null && outputs.slice(0, last).every(x => x.touched) && usedTotal > 0 && (
+                <button onClick={() => setOutputs(outputs.map((x, j) => (j === k ? { ...x, touched: false } : x)))} className="text-xs text-blue-600 hover:underline w-full text-left">
+                  ↺ Work this one out for me (whatever's left)
+                </button>
+              )}
+            </div>
+          );
+        })}
+        <datalist id="fp-cuts">{suggestions.map(c => <option key={c} value={c} />)}</datalist>
+        <button onClick={addOut} className="text-xs text-blue-600 hover:underline">+ another product</button>
+      </div>
+
+      <div className="flex gap-2 flex-wrap">
+        <input value={lotRef} onChange={(e) => setLotRef(e.target.value)} maxLength={64} placeholder="Lot code (optional)" className="w-40 px-2 py-1 border border-gray-300 rounded text-sm" />
+        <input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={200} placeholder="Public notes (optional), e.g. dry-aged 21 days" className="flex-1 min-w-[12rem] px-2 py-1 border border-gray-300 rounded text-sm" />
       </div>
 
       {/* Weight check */}
-      {(usedTotal > 0 || madeTotal > 0) && (
-        <div className={`rounded-lg p-3 text-sm border ${balance === 0 && usedTotal > 0 ? 'bg-green-50 border-green-300 text-green-800'
-          : balance < 0 ? 'bg-red-50 border-red-300 text-red-700' : 'bg-amber-50 border-amber-300 text-amber-800'}`}>
+      {usedTotal > 0 && (
+        <div className={`rounded-lg p-3 text-sm border ${balance === 0 && madeTotal > 0 ? 'bg-green-50 border-green-300 text-green-800'
+          : balance < 0 || (autoIdx !== null && autoVal < 0) ? 'bg-red-50 border-red-300 text-red-700' : 'bg-amber-50 border-amber-300 text-amber-800'}`}>
           <p className="font-semibold">
-            Weight check: used {formatQty(usedTotal, unit)}{addedQty ? ` + ${formatQty(addedQty, unit)} added` : ''} → made {formatQty(madeTotal, unit)} + waste {formatQty(n(waste), unit)}
+            Used {formatQty(usedTotal, unit)}{addedQty ? ` + ${formatQty(addedQty, unit)} added` : ''}{n(waste) ? ` − ${formatQty(n(waste), unit)} waste` : ''} = {formatQty(Math.max(0, available), unit)} of product
           </p>
-          {balance === 0 && usedTotal > 0 && <p>✓ Every kilo is accounted for.</p>}
-          {balance > 0 && (
+          {balance === 0 && madeTotal > 0 && (
+            <p>✓ {outputs.map((o, k) => `${o.productName.trim() || 'product'} ${formatQty(weightOf(k), unit)}`).join(' + ')}</p>
+          )}
+          {autoIdx !== null && autoVal <= 0 && (
+            <p>{autoVal < 0 ? `The products above already weigh ${formatQty(-autoVal, unit)} more than that. Check the weights.` : `Nothing is left for the last product. Remove it, or lower the weights above.`}</p>
+          )}
+          {autoIdx === null && balance > 0 && (
             <div className="mt-1 space-y-1">
-              <p>{formatQty(balance, unit)} isn't accounted for. Every kilo has to go somewhere, or it would vanish from the record.</p>
-              <div className="flex gap-2 flex-wrap">
-                {madeTotal > 0 && (
-                  <button onClick={() => setInputs(inputs.length === 1 ? [{ ...inputs[0], quantity: String(round3(madeTotal + n(waste) - addedQty)) }] : inputs)}
-                    disabled={inputs.length > 1}
-                    className="text-xs bg-white border border-amber-400 px-2 py-1 rounded hover:bg-amber-100 disabled:opacity-50">
-                    Only used {formatQty(round3(madeTotal + n(waste) - addedQty), unit)}: leave the rest on the {isCarcass ? 'carcass' : 'batch'}
-                  </button>
-                )}
-                <button onClick={() => setWaste(String(round3(n(waste) + balance)))} className="text-xs bg-white border border-amber-400 px-2 py-1 rounded hover:bg-amber-100">
-                  Add {formatQty(balance, unit)} to waste
-                </button>
-              </div>
+              <p>{formatQty(balance, unit)} still to share out: put it on a product, or count it as waste.</p>
+              <button onClick={() => setWaste(String(round3(n(waste) + balance)))} className="text-xs bg-white border border-amber-400 px-2 py-1 rounded hover:bg-amber-100">
+                Count {formatQty(balance, unit)} as waste
+              </button>
+              <span className="text-xs text-amber-700"> (you can change the waste box again afterwards)</span>
             </div>
           )}
-          {balance < 0 && <p>Products and waste weigh {formatQty(-balance, unit)} more than you used. Check the weights.</p>}
+          {autoIdx === null && balance < 0 && <p>The products weigh {formatQty(-balance, unit)} more than that. Check the weights.</p>}
         </div>
       )}
 
@@ -645,7 +990,81 @@ function CutForm({ first, all, post, busy, onClose }) {
         <button onClick={onClose} className="text-sm text-gray-600 hover:underline">Cancel</button>
         <span className="text-xs text-gray-400 ml-auto"><Req /> required</span>
       </div>
-      <p className="text-xs text-gray-400">The blockchain checks that products + waste never weigh more than what was used. <a href={EXPLORER} target="_blank" rel="noopener noreferrer" className="underline">Base Sepolia</a></p>
+      <p className="text-xs text-gray-400">The blockchain checks that products + waste never weigh more than what was used plus anything added. <a href={EXPLORER} target="_blank" rel="noopener noreferrer" className="underline">Base Sepolia</a></p>
+    </div>
+  );
+}
+
+// ── 4. Café orders to send ──
+// Cafés order a farm's cuts; the abattoir holding them sends them (soonest use-by first), with the agreed terms fingerprinted.
+function OrdersToSend({ data, post, busy, participants }) {
+  const [form, setForm] = useState({});        // orderId → { via, notes }
+  const ready = data.orders.filter(o => o.ready);
+  const waiting = data.orders.filter(o => !o.ready);
+  const f = (id) => form[id] || { via: '', notes: '' };
+  const gbp = (v) => `£${Number(v).toFixed(2)}`;
+
+  return (
+    <div className="bg-white rounded-lg shadow-lg p-6">
+      <h3 className="text-lg font-bold text-gray-800 mb-1">4. Café orders to send</h3>
+      <p className="text-sm text-gray-500 mb-3">Cafés order cuts from a farm's meat list. When the cuts are here, send them straight to the café.</p>
+      {data.orders.length === 0 && <p className="text-sm text-gray-500">No café orders for meat you're holding.</p>}
+
+      {ready.length > 0 && (
+        <div className="space-y-3 mb-4">
+          <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">✅ Ready to send ({ready.length})</p>
+          {ready.map(o => (
+            <div key={o.id} className="border-2 border-green-200 bg-green-50 rounded-lg p-3 space-y-2">
+              <div className="flex justify-between gap-2 flex-wrap">
+                <div>
+                  <p className="font-semibold text-gray-800">{formatQty(o.quantity, o.unit)} {o.productName} → {o.restaurantName}</p>
+                  <p className="text-xs text-gray-600">
+                    {o.farmName}'s meat{o.preOrder ? ' · pre-order' : ''}{o.neededUntil ? ` · needed by ${ukDate(o.neededUntil)}` : ''} · ordered {ukDate(o.createdAt)}
+                  </p>
+                  {o.note && <p className="text-xs italic text-gray-600">"{o.note}"</p>}
+                </div>
+                {o.unitPrice !== null && <p className="text-sm text-gray-700 text-right">{gbp(o.unitPrice)}/{o.unit}<br /><span className="font-semibold">{gbp(o.unitPrice * o.quantity)}</span></p>}
+              </div>
+              <div className="text-xs text-gray-700 bg-white border border-green-100 rounded p-2">
+                <p className="font-semibold">Send from (soonest use-by first):</p>
+                {o.suggestion.allocations.map(a => (
+                  <p key={a.batchId}>{formatQty(a.quantity, o.unit)} from <span className="font-mono">{a.batchId}</span>{a.lotRef ? ` · lot ${a.lotRef}` : ''}{a.useBy ? ` · use by ${ukDate(a.useBy)}` : ''}{a.allergens?.length ? ` · contains ${a.allergens.join(', ')}` : ''}</p>
+                ))}
+              </div>
+              <div className="flex gap-2 flex-wrap items-center">
+                <select value={f(o.id).via} onChange={(e) => setForm({ ...form, [o.id]: { ...f(o.id), via: e.target.value } })} className="px-2 py-1.5 border border-gray-300 rounded bg-white text-sm">
+                  <option value="">Direct (own delivery)</option>
+                  {participants.filter(p => p.role === 'handler' && p.address !== data.me.address).map(p => <option key={p.address} value={p.address}>via {p.name}</option>)}
+                </select>
+                <input value={f(o.id).notes} maxLength={280} onChange={(e) => setForm({ ...form, [o.id]: { ...f(o.id), notes: e.target.value } })}
+                  placeholder="Notes (optional), e.g. vac-packed, 1 box" className="flex-1 min-w-[10rem] px-2 py-1.5 border border-gray-300 rounded text-sm" />
+                <button disabled={busy !== null} onClick={() => post(`o${o.id}`, `/processor/orders/${o.id}/dispatch`, { via: f(o.id).via || undefined, notes: f(o.id).notes },
+                  `${o.productName} sent to ${o.restaurantName}`)}
+                  className="bg-green-600 text-white text-sm font-semibold px-4 py-1.5 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
+                  {busy === `o${o.id}` ? '⛓️ Sending…' : '🚚 Send order'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {waiting.length > 0 && (
+        <div>
+          <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">📋 Waiting to be cut ({waiting.length})</p>
+          <div className="divide-y divide-gray-100 border border-gray-200 rounded-lg">
+            {waiting.map(o => {
+              const have = round3(o.quantity - o.suggestion.shortBy);
+              return (
+                <div key={o.id} className="px-3 py-2 text-sm flex justify-between gap-2 flex-wrap">
+                  <span><strong>{o.productName}</strong> {formatQty(o.quantity, o.unit)} for {o.restaurantName} <span className="text-gray-500">· {o.farmName}{o.neededUntil ? ` · by ${ukDate(o.neededUntil)}` : ''}</span></span>
+                  <span className="text-xs text-gray-500">{have > 0 ? `${formatQty(have, o.unit)} ready, ${formatQty(o.suggestion.shortBy, o.unit)} still to cut` : o.preOrder ? 'pre-order: cut it next time' : 'none ready'}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

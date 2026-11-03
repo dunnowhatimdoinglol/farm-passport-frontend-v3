@@ -691,9 +691,20 @@ function OrderStock({ authHeader, approved }) {
     cancelled:  ['Cancelled', 'bg-gray-100 text-gray-600'],
   };
 
+  const [kind, setKind] = useState('produce');     // produce | meat
+
   return (
     <div className="space-y-6">
-      {deals.length > 0 && (
+      <div className="flex bg-white rounded-lg shadow p-1 gap-1">
+        {[['produce', '🥕 Fruit, veg & more'], ['meat', '🥩 Meat']].map(([k, label]) => (
+          <button key={k} onClick={() => setKind(k)}
+            className={`flex-1 py-2 rounded-md font-semibold text-sm ${kind === k ? 'bg-orange-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>{label}</button>
+        ))}
+      </div>
+
+      {kind === 'meat' && <MeatOrder authHeader={authHeader} approved={approved} onOrdered={load} />}
+
+      {kind === 'produce' && deals.length > 0 && (
         <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-5">
           <h3 className="text-lg font-bold text-amber-900 mb-1">🏷️ Short-date deals</h3>
           <p className="text-xs text-amber-800 mb-3">Reduced by the farm because the use-by is close — great for today's specials.</p>
@@ -709,7 +720,7 @@ function OrderStock({ authHeader, approved }) {
         </div>
       )}
 
-      <div className="bg-white rounded-lg shadow-lg p-8">
+      {kind === 'produce' && <div className="bg-white rounded-lg shadow-lg p-8">
         <h3 className="text-lg font-bold text-gray-800 mb-1">🛒 Order from a farm</h3>
         <p className="text-sm text-gray-500 mb-5">Choose a product — the farm sends the stock with the soonest use-by first. Payment is arranged directly with the farm for now.</p>
 
@@ -779,7 +790,7 @@ function OrderStock({ authHeader, approved }) {
             {busy ? '⏳ Sending…' : !approved ? '🔒 Waiting for approval' : '🛒 Send order'}
           </button>
         </form>
-      </div>
+      </div>}
 
       <div className="bg-white rounded-lg shadow-lg p-8">
         <h3 className="text-lg font-bold text-gray-800 mb-4">📋 Your orders</h3>
@@ -790,7 +801,9 @@ function OrderStock({ authHeader, approved }) {
             {orders.map(o => (
               <div key={o.id} className="py-3 flex justify-between gap-3 flex-wrap">
                 <div>
-                  <p className="font-semibold text-gray-800">{formatQty(o.quantitySent ?? o.quantity, o.unit)} {o.productName} — {o.farmName}{o.isDeal ? ' 🏷️' : ''}</p>
+                  <p className="font-semibold text-gray-800">{o.isMeat ? '🥩 ' : ''}{formatQty(o.quantitySent ?? o.quantity, o.unit)} {o.productName} — {o.farmName}{o.isDeal ? ' 🏷️' : ''}</p>
+                  {o.isMeat && o.status === 'requested' && <p className="text-xs text-gray-600">{o.preOrder ? '📋 Pre-order: the abattoir sends it once your cuts are ready' : '🔪 Ready at the abattoir: they send it to you'}</p>}
+                  {o.isMeat && o.sentByName && <p className="text-xs text-gray-600">🔪 Sent by {o.sentByName}</p>}
                   {o.quantitySent != null && o.quantitySent !== o.quantity && <p className="text-xs text-amber-700">You asked for {formatQty(o.quantity, o.unit)} — the farm sent {formatQty(o.quantitySent, o.unit)}</p>}
                   <p className="text-xs text-gray-500">
                     {new Date(o.createdAt).toLocaleDateString('en-GB')}{o.neededUntil ? ` · needs to last until ${day(o.neededUntil)}` : ''}{o.note ? ` · "${o.note}"` : ''}
@@ -813,7 +826,7 @@ function OrderStock({ authHeader, approved }) {
                     const st = o.status === 'dispatched' && o.shipmentStatus === 'delivered' ? 'delivered' : o.status;
                     return (
                       <span className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full ${STATUS[st]?.[1] || ''}`}>
-                        {STATUS[st]?.[0] || st}
+                        {o.isMeat && st === 'requested' ? (o.preOrder ? 'Pre-ordered' : 'Being packed') : (STATUS[st]?.[0] || st)}
                       </span>
                     );
                   })()}
@@ -829,6 +842,178 @@ function OrderStock({ authHeader, approved }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────
+// Meat: choose a farm → the animal (Beef, Lamb…) → its cuts. Cuts already made at the abattoir can be
+// ordered now; cuts on the farm's list can be pre-ordered from its next animal. The abattoir sends them.
+// ─────────────────────────────────────────────────────────
+function MeatOrder({ authHeader, approved, onOrdered }) {
+  const [farms,   setFarms]   = useState(null);
+  const [farmAddr, setFarmAddr] = useState(null);
+  const [species, setSpecies] = useState(null);
+  const [qty,     setQty]     = useState({});       // `${farm}|${species}|${cut}` → kg typed
+  const [until,   setUntil]   = useState('');
+  const [note,    setNote]    = useState('');
+  const [busy,    setBusy]    = useState(false);
+  const [error,   setError]   = useState(null);
+  const [message, setMessage] = useState(null);
+  const day = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+
+  const load = async () => {
+    try {
+      const r = await axios.get(`${API_BASE}/restaurant/meat`, authHeader);
+      setFarms(r.data.farms || []);
+    } catch (err) { setError(err.response?.data?.error || 'Could not load meat'); setFarms([]); }
+  };
+  useEffect(() => { load(); }, []);
+  if (!farms) return <div className="bg-white rounded-lg shadow-lg p-8 text-gray-500">⏳ Loading meat…</div>;
+
+  const farm = farms.find(f => f.farmerAddress === farmAddr) || null;
+  const sp = farm ? (farm.species.find(x => x.species === species) || farm.species[0]) : null;
+  const keyOf = (f, s, c) => `${f.farmerAddress}|${s.species}|${c.productName}`;
+  // Everything with a quantity, across farms
+  const basket = farms.flatMap(f => f.species.flatMap(s => s.cuts.map(c => ({ f, s, c, k: keyOf(f, s, c), q: Number(qty[keyOf(f, s, c)]) }))))
+    .filter(x => x.q > 0);
+  const status = (c, q) => (q > 0 && q <= c.inStock ? 'ready' : q > 0 && c.preOrder ? 'pre' : q > 0 ? 'short' : null);
+  const problems = basket.filter(x => status(x.c, x.q) === 'short');
+  const priced = basket.filter(x => x.c.pricePerKg !== null);
+  const total = priced.reduce((n, x) => n + x.q * x.c.pricePerKg, 0);
+
+  const place = async () => {
+    setBusy(true); setError(null); setMessage(null);
+    const ok = [];
+    try {
+      for (const x of basket) {
+        await axios.post(`${API_BASE}/restaurant/orders`, {
+          meat: true, farmerAddress: x.f.farmerAddress, species: x.s.species, productName: x.c.productName, quantity: x.q,
+          neededUntil: until || undefined, note: note.trim() || undefined
+        }, authHeader);
+        ok.push(x);
+      }
+      setMessage(`${ok.length} order${ok.length === 1 ? '' : 's'} placed. ${ok.some(x => status(x.c, x.q) === 'pre') ? 'Pre-orders are sent once the cuts are ready.' : 'The abattoir will send them.'}`);
+      setQty({}); setNote(''); setUntil('');
+    } catch (err) {
+      setError(`${ok.length ? `${ok.length} placed, then ` : ''}${basket[ok.length]?.c.productName}: ${err.response?.data?.error || 'could not order'}`);
+      setQty(Object.fromEntries(basket.slice(ok.length).map(x => [x.k, String(x.q)])));
+    } finally {
+      setBusy(false);
+      load(); onOrdered?.();
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-lg shadow-lg p-6">
+        <h3 className="text-lg font-bold text-gray-800 mb-1">🥩 Order meat from a farm</h3>
+        <p className="text-sm text-gray-500 mb-4">Pick a farm and the animal, then the cuts. Ready cuts come from the abattoir that cut them; others can be pre-ordered from the farm's next animal.</p>
+        {farms.length === 0 && <p className="text-sm text-gray-500">No farms are selling meat yet.</p>}
+
+        {/* 1. Farm */}
+        <div className="grid sm:grid-cols-2 gap-2">
+          {farms.map(f => {
+            const ready = f.species.reduce((n, s) => n + s.cuts.filter(c => c.inStock > 0).length, 0);
+            const inBasket = basket.filter(x => x.f.farmerAddress === f.farmerAddress).length;
+            return (
+              <button key={f.farmerAddress} onClick={() => { setFarmAddr(f.farmerAddress); setSpecies(f.species[0]?.species); }}
+                className={`text-left border-2 rounded-lg p-3 ${farmAddr === f.farmerAddress ? 'border-orange-500 bg-orange-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                <p className="font-bold text-gray-800">{f.farmName || 'Farm'} {inBasket > 0 && <span className="text-xs bg-orange-600 text-white rounded-full px-2 py-0.5 ml-1">{inBasket} in order</span>}</p>
+                <p className="text-xs text-gray-600">{f.species.map(s => s.label).join(' · ')}</p>
+                <p className="text-xs text-green-700 font-semibold">{ready ? `${ready} cut${ready === 1 ? '' : 's'} ready now` : 'Pre-order only right now'}</p>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* 2. Animal, 3. Cuts */}
+        {farm && sp && (
+          <div className="mt-5">
+            <div className="flex gap-1 border-b border-gray-200 mb-3">
+              {farm.species.map(s => (
+                <button key={s.species} onClick={() => setSpecies(s.species)}
+                  className={`px-4 py-2 text-sm font-semibold rounded-t-lg ${sp.species === s.species ? 'bg-gray-800 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+                  {s.label} <span className="font-normal opacity-75">({s.cuts.length})</span>
+                </button>
+              ))}
+            </div>
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {sp.cuts.map(c => {
+                const k = keyOf(farm, sp, c);
+                const q = Number(qty[k]);
+                const st = status(c, q);
+                const unavailable = c.inStock <= 0 && !c.preOrder;
+                return (
+                  <div key={k} className={`border rounded-lg p-3 flex flex-col ${q > 0 ? (st === 'short' ? 'border-red-400 bg-red-50' : 'border-orange-500 bg-orange-50') : 'border-gray-200'} ${unavailable ? 'opacity-50' : ''}`}>
+                    <div className="flex justify-between gap-2">
+                      <p className="font-semibold text-gray-800">{c.productName}</p>
+                      <p className="text-sm font-semibold text-gray-700 shrink-0">{c.pricePerKg !== null ? `${gbp(c.pricePerKg)}/kg` : <span className="text-xs text-gray-400 font-normal">price on request</span>}</p>
+                    </div>
+                    <p className="text-xs mt-0.5">
+                      {c.inStock > 0
+                        ? <span className="text-green-700 font-semibold">✅ {formatQty(c.inStock, 'kg')} ready{c.useByFrom ? ` · use by ${day(c.useByFrom)}` : ''}</span>
+                        : c.preOrder ? <span className="text-amber-700 font-semibold">📋 Pre-order from the next {sp.label.toLowerCase()}</span>
+                        : <span className="text-gray-500">Not available right now</span>}
+                    </p>
+                    {c.note && <p className="text-xs text-gray-500 italic">{c.note}</p>}
+                    {c.allergens?.length > 0 && <p className="text-xs text-amber-800">⚠️ Contains: {c.allergens.join(', ')}</p>}
+                    <div className="mt-auto pt-2 flex items-center gap-1">
+                      <button type="button" disabled={unavailable || !(q > 0)} onClick={() => setQty({ ...qty, [k]: String(Math.max(0, Math.round(((q || 0) - 1) * 1000) / 1000) || '') })}
+                        className="w-8 h-8 rounded border border-gray-300 bg-white disabled:opacity-40" aria-label="Less">−</button>
+                      <input type="number" step="any" min="0" value={qty[k] ?? ''} disabled={unavailable} onChange={(e) => setQty({ ...qty, [k]: e.target.value })}
+                        placeholder="0" className="w-20 px-2 py-1 border border-gray-300 rounded text-center" aria-label={`${c.productName} kg`} />
+                      <button type="button" disabled={unavailable} onClick={() => setQty({ ...qty, [k]: String(Math.round(((q || 0) + 1) * 1000) / 1000) })}
+                        className="w-8 h-8 rounded border border-gray-300 bg-white disabled:opacity-40" aria-label="More">+</button>
+                      <span className="text-sm text-gray-500">kg</span>
+                    </div>
+                    {st === 'pre' && c.inStock > 0 && <p className="text-xs text-amber-700 mt-1">Only {formatQty(c.inStock, 'kg')} ready, so this becomes a pre-order.</p>}
+                    {st === 'short' && <p className="text-xs text-red-700 mt-1">Only {formatQty(c.inStock, 'kg')} ready, and the farm doesn't take pre-orders for this.</p>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {(basket.length > 0 || message || error) && (
+        <div className="bg-white rounded-lg shadow-lg p-6 border-2 border-orange-500 sticky bottom-2">
+          {basket.length > 0 && (
+            <>
+              <p className="font-bold text-gray-800 mb-2">🧺 Your meat order</p>
+              <div className="divide-y divide-gray-100 text-sm mb-3">
+                {basket.map(x => (
+                  <div key={x.k} className="py-1.5 flex justify-between gap-2">
+                    <span>{formatQty(x.q, 'kg')} {x.c.productName} <span className="text-gray-500">· {x.f.farmName}</span>{' '}
+                      <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${status(x.c, x.q) === 'ready' ? 'bg-green-100 text-green-800' : status(x.c, x.q) === 'pre' ? 'bg-amber-100 text-amber-900' : 'bg-red-100 text-red-800'}`}>
+                        {status(x.c, x.q) === 'ready' ? 'ready' : status(x.c, x.q) === 'pre' ? 'pre-order' : 'not enough'}</span></span>
+                    <span className="text-gray-700 shrink-0">{x.c.pricePerKg !== null ? gbp(x.q * x.c.pricePerKg) : '—'}
+                      <button onClick={() => setQty({ ...qty, [x.k]: '' })} className="ml-2 text-xs text-red-600" aria-label="Remove">✕</button></span>
+                  </div>
+                ))}
+              </div>
+              <div className="grid sm:grid-cols-2 gap-3 mb-3">
+                <label className="text-xs font-semibold text-gray-700">Needed by <span className="font-normal text-gray-400">(optional)</span>
+                  <input type="date" value={until} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setUntil(e.target.value)} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg font-normal" />
+                </label>
+                <label className="text-xs font-semibold text-gray-700">Note <span className="font-normal text-gray-400">(optional)</span>
+                  <input value={note} maxLength={280} onChange={(e) => setNote(e.target.value)} placeholder="e.g. steaks cut 2 cm thick" className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg font-normal" />
+                </label>
+              </div>
+              <p className="text-sm text-gray-700 mb-2">{priced.length ? <>Estimated <strong>{gbp(total)}</strong>{priced.length < basket.length ? ' + items priced on request' : ''}</> : 'Prices on request'} <span className="text-xs text-gray-400">· final weights and prices are confirmed when it's sent</span></p>
+            </>
+          )}
+          {error && <p className="text-sm text-red-600 font-semibold mb-2">⚠️ {error}</p>}
+          {message && <p className="text-sm text-green-700 font-semibold mb-2">✅ {message}</p>}
+          {basket.length > 0 && (
+            <button onClick={place} disabled={busy || !approved || problems.length > 0}
+              className="w-full bg-orange-600 text-white py-3 rounded-lg font-bold hover:bg-orange-700 disabled:bg-gray-400">
+              {busy ? '⏳ Ordering…' : !approved ? '🔒 Waiting for approval' : problems.length ? `Fix ${problems.length} item${problems.length === 1 ? '' : 's'} first` : `🛒 Place ${basket.length} order${basket.length === 1 ? '' : 's'}`}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
