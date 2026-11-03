@@ -279,6 +279,7 @@ function AnimalsIn({ data, auth, busy, post }) {
               ) : (
                 <div className="mt-2 bg-white border border-red-200 rounded-lg p-3 space-y-2">
                   <p className="text-sm font-bold text-red-800">✋ Refuse animals from this delivery</p>
+                  <p className="text-xs text-gray-600">Refuse at the unloading bay, so they go straight back on the same lorry. Once animals are in your lairage they normally have to be slaughtered here: moving them out needs an APHA licence, and pigs can't leave at all. If you're keeping them (e.g. to clip dirty cattle, or waiting for the FCI), confirm they arrived instead and add a note.</p>
                   <div className="flex gap-3 flex-wrap items-end">
                     <label className="text-xs font-semibold text-gray-700">How many refused <Req />
                       <span className="flex items-center gap-1 mt-1 font-normal">
@@ -300,7 +301,7 @@ function AnimalsIn({ data, auth, busy, post }) {
                     className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm" />
                   <p className="text-xs text-gray-500">
                     {Number.isInteger(n) && n > 0 && n < s.quantitySent ? `The other ${s.quantitySent - n} head will be accepted. ` : ''}
-                    Refused animals go back on {s.fromName}'s count, so they can be sent again. The reason is recorded on the blockchain and the farm sees it.
+                    Refused animals go back on {s.fromName}'s count (they return with the haulier), so they can be sent again later. The reason is recorded on the blockchain and the farm sees it.
                   </p>
                   <div className="flex gap-2 items-center">
                     <button disabled={busy !== null || !refuseOk || (r.reason === 'Other' && !r.notes.trim())} onClick={() => refuse(s)}
@@ -537,7 +538,7 @@ function MadeHere({ data, post, postMany, busy, participants }) {
           <div className="flex-1 min-w-0 flex justify-between gap-3">
             <div className="min-w-0">
               <p className="font-semibold text-gray-800 text-sm">{b.productName}</p>
-              <p className="text-xs text-gray-500">{refOf(b)}{b.useBy ? ` · use by ${ukDate(b.useBy)}` : ''} · <span className="font-mono text-gray-400">{b.batchId}</span></p>
+              <p className="text-xs text-gray-500">{refOf(b)}{b.pieces ? ` · ${b.pieces} pieces (≈${Math.round((b.quantity / b.pieces) * 1000)} g each)` : ''}{b.useBy ? ` · use by ${ukDate(b.useBy)}` : ''} · <span className="font-mono text-gray-400">{b.batchId}</span></p>
               {b.allergens?.length > 0 && <p className="text-xs text-amber-800">⚠️ Contains: {b.allergens.join(', ')}</p>}
             </div>
             <LeftBar b={b} small />
@@ -616,7 +617,7 @@ function MadeHere({ data, post, postMany, busy, participants }) {
           {shown.length === 0 && <p className="text-sm text-gray-500">Nothing here right now. Record a kill sheet first{all.length ? ', or look in History' : ''}.</p>}
           <div className="space-y-4">
             {shown.map(g => {
-              const pre = waiting.filter(o => o.farmerAddress === g.key);
+              const pre = waiting.filter(o => o.farmerAddress === g.key && (o.toCut ?? o.suggestion.shortBy) > 0);
               const nCarc = g.carcasses.filter(c => live(c.carcass)).length;
               const nProd = g.carcasses.reduce((n, c) => n + c.products.length, 0) + g.other.length;
               return (
@@ -633,7 +634,7 @@ function MadeHere({ data, post, postMany, busy, participants }) {
                       {pre.length > 0 && (
                         <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-xs text-amber-900">
                           <p className="font-semibold">📋 Cut to order for {g.farmName}:</p>
-                          <p>{pre.map(o => `${o.productName} ${formatQty(o.suggestion.shortBy, o.unit)}${o.suggestion.shortBy < o.quantity ? ' more' : ''} (${o.restaurantName}${o.neededUntil ? `, by ${ukDate(o.neededUntil)}` : ''})`).join(' · ')}</p>
+                          <p>{pre.map(o => `${o.productName} ${formatQty(o.toCut ?? o.suggestion.shortBy, o.unit)}${(o.toCut ?? o.suggestion.shortBy) < o.quantity ? ' more' : ''} (${o.restaurantName}${o.neededUntil ? `, by ${ukDate(o.neededUntil)}` : ''})`).join(' · ')}</p>
                         </div>
                       )}
                       {g.carcasses.map(carcassCard)}
@@ -780,7 +781,7 @@ const ADD_HINT = {
   Marinating: 'e.g. oil, garlic, herbs',
   Packing: 'e.g. a sauce or glaze',
 };
-const blankOut = () => ({ productName: '', quantity: '', useBy: '', touched: false });
+const blankOut = () => ({ productName: '', quantity: '', pieces: '', useBy: '', touched: false });
 
 function CutForm({ first, all, data, post, busy, onClose }) {
   const isCarcass = first.kind === 'Slaughter';
@@ -819,6 +820,9 @@ function CutForm({ first, all, data, post, busy, onClose }) {
   const setOut = (i, k, v) => setOutputs(outputs.map((x, j) => (j === i ? { ...x, [k]: v, ...(k === 'quantity' ? { touched: true } : {}) } : x)));
   // A new product takes whatever is left; the ones above keep what you typed (an auto one is cleared for you to fill in)
   const addOut = () => setOutputs([...outputs.map(o => (o.touched ? o : { ...o, touched: true, quantity: '' })), { ...blankOut(), useBy: outputs[last].useBy }]);
+  // Same product again (e.g. a second lot of steaks from the other side): copies the name, use-by and piece count
+  const copyOut = (k) => setOutputs([...outputs.map(o => (o.touched ? o : { ...o, touched: true, quantity: '' })),
+    { ...blankOut(), productName: outputs[k].productName, useBy: outputs[k].useBy, pieces: outputs[k].pieces }]);
   const others = all.filter(b => b.unit === unit && !inputs.some(i => i.batchId === b.batchId));
   const toggleAllergen = (a) => setAllergens(allergens.includes(a) ? allergens.filter(x => x !== a) : [...allergens, a]);
 
@@ -839,7 +843,7 @@ function CutForm({ first, all, data, post, busy, onClose }) {
       ingredients: addedOpen && (addedQty > 0 || ingredients.trim()) ? ingredients.trim() : undefined,
       allergens: addedOpen ? allergens : [],
       inputs: inputs.filter(i => n(i.quantity) > 0).map(i => ({ batchId: i.batchId, quantity: n(i.quantity) })),
-      outputs: outputs.map((o, k) => ({ productName: o.productName.trim(), quantity: weightOf(k), useBy: o.useBy }))
+      outputs: outputs.map((o, k) => ({ productName: o.productName.trim(), quantity: weightOf(k), useBy: o.useBy, pieces: Number(o.pieces) > 0 ? Math.round(Number(o.pieces)) : undefined }))
     }, (d) => `${d.batches.length} product${d.batches.length === 1 ? '' : 's'} made: ${d.batches.map(b => `${b.productName} ${b.quantity} ${b.unit}`).join(', ')}`);
     if (r) onClose();
   };
@@ -918,29 +922,37 @@ function CutForm({ first, all, data, post, busy, onClose }) {
 
       <div className="bg-white border border-gray-200 rounded-lg p-3">
         <p className="text-sm font-bold text-gray-800">3. What did you make? <Req /></p>
-        <p className="text-xs text-gray-500 mb-2">The last product's weight fills itself in with what's left. Type over it if you weighed it.</p>
-        <div className="hidden sm:flex gap-2 text-xs font-semibold text-gray-600 mb-1">
-          <span className="flex-1 min-w-[10rem]">Product <Req /></span><span className="w-36">Weight <Req /></span><span className="w-36">Use by <Req /></span><span className="w-4" />
-        </div>
+        <p className="text-xs text-gray-500 mb-2">One line per product, with its total weight (e.g. 12 kg of sirloin steaks). The last product's weight fills itself in with what's left; type over it if you weighed it. Pieces is optional (e.g. 30 steaks).</p>
         {outputs.map((o, k) => {
           const auto = k === autoIdx;
           return (
-            <div key={k} className="flex gap-2 items-center text-sm mb-2 flex-wrap">
-              <input list="fp-cuts" value={o.productName} onChange={(e) => setOut(k, 'productName', e.target.value)} maxLength={100} placeholder="e.g. Sirloin steak"
-                className="flex-1 min-w-[10rem] px-2 py-1 border border-gray-300 rounded" aria-label="Product name (required)" />
-              <span className="w-36 flex items-center gap-1">
-                <input type="number" step="any" min="0" value={auto ? (usedTotal > 0 ? String(Math.max(0, autoVal)) : '') : o.quantity}
-                  onChange={(e) => setOut(k, 'quantity', e.target.value)} placeholder="0.0"
-                  className={`w-24 px-2 py-1 border rounded ${auto && usedTotal > 0 ? 'border-green-400 bg-green-50' : 'border-gray-300'}`} aria-label="Weight (required)" />
-                <span className="text-gray-500">{unit}</span>
-                {auto && usedTotal > 0 && <span className="text-[10px] font-semibold text-green-700 uppercase">auto</span>}
-              </span>
-              <input type="date" min={today()} value={o.useBy} onChange={(e) => setOut(k, 'useBy', e.target.value)}
-                className="w-36 px-1 py-1 border border-gray-300 rounded text-sm" aria-label="Use by (required)" />
-              <span className="w-4">{outputs.length > 1 && <button onClick={() => setOutputs(outputs.filter((_, j) => j !== k))} className="text-xs text-red-600" aria-label="Remove product">✕</button>}</span>
+            <div key={k} className="border border-gray-200 rounded-lg p-2 mb-2 space-y-1.5">
+              <div className="flex gap-2 items-center">
+                <input list="fp-cuts" value={o.productName} onChange={(e) => setOut(k, 'productName', e.target.value)} maxLength={100} placeholder="Product, e.g. Sirloin steak *"
+                  className="flex-1 min-w-0 px-2 py-1 border border-gray-300 rounded text-sm" aria-label="Product name (required)" />
+                <button onClick={() => copyOut(k)} className="text-xs text-gray-600 border border-gray-300 rounded px-1.5 py-0.5 hover:bg-gray-50" title="Add another line for the same product" aria-label="Duplicate product">⧉ copy</button>
+                {outputs.length > 1 && <button onClick={() => setOutputs(outputs.filter((_, j) => j !== k))} className="text-xs text-red-600 px-1" aria-label="Remove product">✕</button>}
+              </div>
+              <div className="flex gap-x-4 gap-y-1.5 items-center flex-wrap text-xs text-gray-600">
+                <label className="flex items-center gap-1">Total weight <Req />
+                  <input type="number" step="any" min="0" value={auto ? (usedTotal > 0 ? String(Math.max(0, autoVal)) : '') : o.quantity}
+                    onChange={(e) => setOut(k, 'quantity', e.target.value)} placeholder="0.0"
+                    className={`w-20 px-2 py-1 border rounded text-sm ${auto && usedTotal > 0 ? 'border-green-400 bg-green-50' : 'border-gray-300'}`} aria-label="Weight (required)" />
+                  {unit}{auto && usedTotal > 0 && <span className="text-[10px] font-semibold text-green-700 uppercase">auto</span>}
+                </label>
+                <label className="flex items-center gap-1">Pieces
+                  <input type="number" min="1" step="1" value={o.pieces} onChange={(e) => setOutputs(outputs.map((x, j) => (j === k ? { ...x, pieces: e.target.value } : x)))}
+                    placeholder="—" className="w-14 px-2 py-1 border border-gray-300 rounded text-sm" aria-label="Pieces (optional)" />
+                  {Number(o.pieces) > 0 && weightOf(k) > 0 && <span className="text-gray-500">≈ {Math.round((weightOf(k) / Number(o.pieces)) * 1000)} g each</span>}
+                </label>
+                <label className="flex items-center gap-1">Use by <Req />
+                  <input type="date" min={today()} value={o.useBy} onChange={(e) => setOut(k, 'useBy', e.target.value)}
+                    className="px-1 py-1 border border-gray-300 rounded text-sm" aria-label="Use by (required)" />
+                </label>
+              </div>
               {k === last && !auto && o.touched && autoIdx === null && outputs.slice(0, last).every(x => x.touched) && usedTotal > 0 && (
-                <button onClick={() => setOutputs(outputs.map((x, j) => (j === k ? { ...x, touched: false } : x)))} className="text-xs text-blue-600 hover:underline w-full text-left">
-                  ↺ Work this one out for me (whatever's left)
+                <button onClick={() => setOutputs(outputs.map((x, j) => (j === k ? { ...x, touched: false } : x)))} className="text-xs text-blue-600 hover:underline">
+                  ↺ Work this weight out for me (whatever's left)
                 </button>
               )}
             </div>
@@ -1058,7 +1070,10 @@ function OrdersToSend({ data, post, busy, participants }) {
               return (
                 <div key={o.id} className="px-3 py-2 text-sm flex justify-between gap-2 flex-wrap">
                   <span><strong>{o.productName}</strong> {formatQty(o.quantity, o.unit)} for {o.restaurantName} <span className="text-gray-500">· {o.farmName}{o.neededUntil ? ` · by ${ukDate(o.neededUntil)}` : ''}</span></span>
-                  <span className="text-xs text-gray-500">{have > 0 ? `${formatQty(have, o.unit)} ready, ${formatQty(o.suggestion.shortBy, o.unit)} still to cut` : o.preOrder ? 'pre-order: cut it next time' : 'none ready'}</span>
+                  <span className="text-xs text-gray-500">
+                    {[have > 0 && `${formatQty(have, o.unit)} ready here`, o.atFarm > 0 && `${formatQty(o.atFarm, o.unit)} at the farm (they can send it)`,
+                      o.toCut > 0 && `${formatQty(o.toCut, o.unit)} still to cut`].filter(Boolean).join(' · ') || (o.preOrder ? 'pre-order: cut it next time' : 'none ready')}
+                  </span>
                 </div>
               );
             })}

@@ -167,7 +167,15 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
         <div className="space-y-3">
           {open.filter(o => o.isMeat).map(o => {
             const ready = o.readyAtAbattoir || 0;
+            const atFarm = o.readyAtFarm || 0;
             const day = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+            // Boxed cuts back at the farm: the farm sends from those deliveries itself
+            const plan = alloc[o.id] || (o.suggestion?.allocations || []).map(a => ({ ...a, unitPrice: a.pricePerUnit ?? '' }));
+            const setPlan = (next) => setAlloc({ ...alloc, [o.id]: next });
+            const sendQty = Math.round(plan.reduce((n, a) => n + (toNum(a.quantity) || 0), 0) * 1000) / 1000;
+            const df = toNum(fee[o.id]) || 0;
+            const priced = plan.every(a => toNum(a.unitPrice) !== null);
+            const total = priced ? Math.round((plan.reduce((n, a) => n + (toNum(a.quantity) || 0) * toNum(a.unitPrice), 0) + df) * 100) / 100 : null;
             return (
               <div key={o.id} className="border-2 border-rose-200 bg-rose-50 rounded-lg p-4">
                 <div className="flex justify-between items-start gap-3 flex-wrap">
@@ -180,11 +188,56 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                   </div>
                   <Badge status={o.status} />
                 </div>
+                {atFarm > 0 && (
+                  <div className="mt-3 bg-white border border-rose-200 rounded-lg p-3">
+                    <p className="text-sm font-semibold text-gray-800 mb-1">📦 You have {formatQty(atFarm, o.unit)} here (boxed cuts back from the abattoir). Send it yourself:</p>
+                    {plan.map((a, i) => (
+                      <div key={a.shipmentId} className="flex gap-2 items-center flex-wrap text-sm mb-1">
+                        <span className="text-xs text-gray-600 w-44">delivery #{a.shipmentId}{a.lotRef ? ` · lot ${a.lotRef}` : ''}</span>
+                        <span className="text-xs text-gray-500 w-24">use by {a.useBy ? day(a.useBy) : '—'}</span>
+                        <input type="number" step="any" min="0" max={a.remaining} value={a.quantity}
+                          onChange={(e) => setPlan(plan.map((x, j) => (j === i ? { ...x, quantity: e.target.value } : x)))}
+                          className="w-20 px-2 py-1 border border-gray-300 rounded" disabled={busyId === o.id} />
+                        <span className="text-gray-500">{o.unit}</span>
+                        <span className="text-gray-500 ml-1">£</span>
+                        <input type="number" step="0.01" min="0" value={a.unitPrice}
+                          onChange={(e) => setPlan(plan.map((x, j) => (j === i ? { ...x, unitPrice: e.target.value } : x)))}
+                          placeholder="price" className="w-20 px-2 py-1 border border-gray-300 rounded" disabled={busyId === o.id} />
+                        <span className="text-xs text-gray-500">/{o.unit}</span>
+                      </div>
+                    ))}
+                    <div className="flex gap-2 mt-2 flex-wrap items-center text-sm">
+                      <select value={via[o.id] || ''} onChange={(e) => setVia({ ...via, [o.id]: e.target.value })} disabled={busyId === o.id}
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
+                        <option value="">Direct (own delivery)</option>
+                        {carriers.map(c => <option key={c.address} value={c.address}>via {c.name}</option>)}
+                      </select>
+                      <label className="text-gray-600 ml-2">🚚 Delivery £</label>
+                      <input type="number" step="0.01" min="0" value={fee[o.id] ?? ''} onChange={(e) => setFee({ ...fee, [o.id]: e.target.value })}
+                        placeholder="0.00" className="w-24 px-3 py-2 border border-gray-300 rounded-lg" disabled={busyId === o.id} />
+                      <span className="ml-2 font-semibold text-gray-800">
+                        {formatQty(sendQty, o.unit)} · {total != null ? <>Total {gbp(total)}</> : <span className="text-gray-400 font-normal">set prices to see the total</span>}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => act(o, 'dispatch', {
+                        allocations: plan.map(a => ({ shipmentId: a.shipmentId, quantity: toNum(a.quantity), unitPrice: toNum(a.unitPrice) ?? undefined })),
+                        via: via[o.id] || undefined, deliveryFee: toNum(fee[o.id]) ?? undefined,
+                      })}
+                      disabled={busyId === o.id || !approved || !plan.length || !(sendQty > 0)}
+                      className="mt-2 bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
+                      {busyId === o.id ? '⛓️ Recording…' : `🚚 Send ${formatQty(sendQty, o.unit)} to ${o.restaurantName}`}
+                    </button>
+                    {sendQty < o.quantity && sendQty > 0 && <p className="text-xs text-amber-700 mt-1">That's part of the order: the rest {ready > 0 ? 'is at the abattoir' : 'will need cutting'}.</p>}
+                  </div>
+                )}
                 <p className="text-sm mt-2 text-gray-800">
-                  {ready >= o.quantity
-                    ? <>🔪 Ready at <strong>{(o.abattoirNames || []).join(', ') || 'the abattoir'}</strong>. They'll send it to the café.</>
+                  {atFarm >= o.quantity ? null
+                    : ready >= o.quantity
+                    ? <>🔪 Ready at <strong>{(o.abattoirNames || []).join(', ') || 'the abattoir'}</strong>. They'll send it to the café{atFarm > 0 ? ', unless you send yours first' : ''}.</>
                     : ready > 0
-                      ? <>🔪 {formatQty(ready, o.unit)} ready at {(o.abattoirNames || []).join(', ')}; {formatQty(o.quantity - ready, o.unit)} still to be cut.</>
+                      ? <>🔪 {formatQty(ready, o.unit)} ready at {(o.abattoirNames || []).join(', ')}{atFarm > 0 ? `, ${formatQty(atFarm, o.unit)} here` : ''}; the rest still needs cutting.</>
+                      : atFarm > 0 ? <>📋 The rest is on your cutting list for the abattoir.</>
                       : <>📋 On your cutting list: the abattoir will see it when it cuts your next {o.species === 'Sheep' ? 'lambs' : o.species === 'Pig' ? 'pigs' : 'animal'}.</>}
                 </p>
                 <div className="flex gap-2 mt-3">
@@ -324,7 +377,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
 // ─────────────────────────────────────────────
 // Send part of a batch to a depot / business (no order needed)
 // ─────────────────────────────────────────────
-export function DispatchForm({ farmerToken, batch, batches = [], onDone, onCancel }) {
+export function DispatchForm({ farmerToken, batch, batches = [], preselected = [], onDone, onCancel }) {
   const [participants, setParticipants] = useState([]);
   const [to,       setTo]       = useState('');
   const [quantity, setQuantity] = useState('');
@@ -333,21 +386,28 @@ export function DispatchForm({ farmerToken, batch, batches = [], onDone, onCance
   const [busy,     setBusy]     = useState(false);
   const [error,    setError]    = useState(null);
   const [progress, setProgress] = useState(null);
-  const [liveWeight, setLiveWeight] = useState('');   // optional, for the abattoir's information
-  const [also,     setAlso]     = useState({});       // other animals going in the same load: batchId → true
   const [preOrders, setPreOrders] = useState([]);     // café pre-orders waiting for this species (the cutting list)
   const auth = { headers: { Authorization: `Bearer ${farmerToken}` } };
 
   const remaining = Number(batch.quantityRemaining ?? batch.quantity);
   // Live animals only go to approved abattoirs, with Food Chain Information
   const isLivestock = batch.productType === 'Livestock';
-  const isCattle = isLivestock && batch.species === 'Cattle';
   const [fci, setFci] = useState({});
-  const [sentId, setSentId] = useState(null);       // dispatched, but the FCI still needs sending (retry)
+  const [sent, setSent] = useState({});             // batchId → shipmentId already dispatched (so a retry only re-sends the FCI)
   const choices = isLivestock ? participants.filter(p => p.processorApproval) : participants;
-  const others = isLivestock ? batches.filter(b => b.batchId !== batch.batchId && b.productType === 'Livestock' && b.species === batch.species
-    && !b.recalled && Number(b.quantityRemaining ?? b.quantity) > 0) : [];
-  const extra = others.filter(b => also[b.batchId]);
+  const left = (b) => Number(b.quantityRemaining ?? b.quantity);
+
+  // Livestock: every animal / group that could go in this load, one row each (its own head count and live weight)
+  const candidates = isLivestock
+    ? [batch, ...batches.filter(b => b.batchId !== batch.batchId && b.productType === 'Livestock' && !b.recalled && left(b) > 0)]
+    : [];
+  const [load, setLoad] = useState(() => Object.fromEntries([batch.batchId, ...preselected].map(id => [id, { on: true }])));
+  const rowOf = (b) => load[b.batchId] || {};
+  const setRow = (b, k, v) => setLoad({ ...load, [b.batchId]: { ...rowOf(b), [k]: v } });
+  const headOf = (b) => (b.species === 'Cattle' ? 1 : Number(rowOf(b).head ?? left(b)));
+  const inLoad = candidates.filter(b => rowOf(b).on);
+  const [showAll, setShowAll] = useState(false);
+  const listed = showAll ? candidates : candidates.filter(b => rowOf(b).on || b.species === batch.species).slice(0, Math.max(8, inLoad.length));
 
   useEffect(() => {
     axios.get(`${API_BASE}/participants`)
@@ -355,18 +415,19 @@ export function DispatchForm({ farmerToken, batch, batches = [], onDone, onCance
       .catch(() => setError('Could not load the list of businesses'));
     if (isLivestock) {
       axios.get(`${API_BASE}/farmer/orders`, auth)
-        .then(res => setPreOrders((res.data.orders || []).filter(o => o.isMeat && o.status === 'requested' && (!o.species || o.species === batch.species)
-          && (o.readyAtAbattoir ?? 0) < o.quantity)))
+        .then(res => setPreOrders((res.data.orders || []).filter(o => o.isMeat && o.status === 'requested'
+          && (o.readyAtAbattoir || 0) + (o.readyAtFarm || 0) < o.quantity)))
         .catch(() => {});
     }
   }, []);
-  useEffect(() => { if (isCattle) setQuantity('1'); }, [isCattle]);
 
   const qty = Number(quantity);
+  const badHead = inLoad.find(b => !(Number.isInteger(headOf(b)) && headOf(b) >= 1 && headOf(b) <= left(b)));
   const missing = [
     !to && (isLivestock ? 'the abattoir' : 'who it goes to'),
-    !(qty > 0) && 'how many',
-    qty > remaining && `no more than ${formatQty(remaining, batch.unit)}`,
+    isLivestock ? (!inLoad.length && 'at least one animal') : !(qty > 0) && 'how much',
+    !isLivestock && qty > remaining && `no more than ${formatQty(remaining, batch.unit)}`,
+    badHead && `a head count for ${badHead.animalRef || badHead.batchId} (1–${left(badHead)})`,
     isLivestock && !fciComplete(fci) && 'the three FCI declarations',
   ].filter(Boolean);
 
@@ -375,30 +436,34 @@ export function DispatchForm({ farmerToken, batch, batches = [], onDone, onCance
     if (missing.length) { setError(`Still needed: ${missing.join(', ')}`); return; }
     setBusy(true);
     setError(null);
-    const lw = Number(liveWeight) > 0 ? `Approx. live weight ${Number(liveWeight)} kg${isCattle ? '' : ' each'}` : '';
-    const noteText = [lw, notes.trim()].filter(Boolean).join(' · ').slice(0, 280);
-    const loads = [{ b: batch, q: qty }, ...extra.map(b => ({ b, q: Number(b.quantityRemaining ?? b.quantity) }))];
-    const sent = [];
+    const loads = isLivestock
+      ? inLoad.map(b => {
+          const lw = Number(rowOf(b).weight) > 0 ? `Approx. live weight ${Number(rowOf(b).weight)} kg${b.species === 'Cattle' ? '' : ' each'}` : '';
+          return { b, q: headOf(b), notes: [lw, notes.trim()].filter(Boolean).join(' · ').slice(0, 280) };
+        })
+      : [{ b: batch, q: qty, notes: notes.trim() }];
+    const done = { ...sent };
     try {
       for (const [i, l] of loads.entries()) {
         if (loads.length > 1) setProgress(`Sending ${i + 1} of ${loads.length}…`);
-        let shipmentId = i === 0 ? sentId : null;
+        if (done[l.b.batchId] === 'done') continue;
+        let shipmentId = done[l.b.batchId];
         if (!shipmentId) {
           const res = await axios.post(`${API_BASE}/farmer/dispatch`,
-            { batchId: l.b.batchId, to, quantity: l.q, notes: noteText, via: via || undefined }, auth);
+            { batchId: l.b.batchId, to, quantity: l.q, notes: l.notes, via: via || undefined }, auth);
           shipmentId = res.data.shipmentId;
+          done[l.b.batchId] = shipmentId;
+          setSent({ ...done });
         }
-        if (isLivestock) {
-          if (i === 0) setSentId(shipmentId);
-          await sendFci(shipmentId, fci, farmerToken);
-        }
-        sent.push(l.b.animalRef || l.b.batchId);
+        if (isLivestock) await sendFci(shipmentId, fci, farmerToken);
+        done[l.b.batchId] = 'done';
+        setSent({ ...done });
       }
       onDone?.();
     } catch (err) {
       const why = err.response?.data?.error || 'Could not dispatch';
-      setError(sent.length ? `Sent: ${sent.join(', ')}. Then stopped: ${why}` : (sentId || isLivestock ? 'The animals are on their way, but the Food Chain Information didn’t send: ' : '') + why);
-      if (sent.length) setAlso(Object.fromEntries(extra.filter(b => !sent.includes(b.animalRef || b.batchId)).map(b => [b.batchId, true])));
+      const n = Object.values(done).filter(v => v === 'done').length;
+      setError(`${n ? `${n} sent. ` : ''}${Object.values(done).some(v => v && v !== 'done') ? 'An animal is on its way but its Food Chain Information didn’t send — press the button again to resend it. ' : ''}${why}`);
     } finally {
       setBusy(false);
       setProgress(null);
@@ -406,13 +471,14 @@ export function DispatchForm({ farmerToken, batch, batches = [], onDone, onCance
   };
 
   const Req = () => <span className="text-red-600 font-bold">*</span>;
+  const pending = Object.values(sent).some(v => v && v !== 'done');
   return (
     <form onSubmit={submit} className="mt-3 bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
       <p className="text-sm font-semibold text-gray-700">
-        {isLivestock ? '🐄 Send to an abattoir' : '🚚 Send part of this batch'} · {formatQty(remaining, batch.unit)} still at the farm
+        {isLivestock ? '🐄 Send to an abattoir' : `🚚 Send part of this batch · ${formatQty(remaining, batch.unit)} still at the farm`}
       </p>
       <label className="block text-xs font-semibold text-gray-700">{isLivestock ? 'Abattoir' : 'Send to'} <Req />
-        <select value={to} onChange={(e) => setTo(e.target.value)} disabled={!!sentId}
+        <select value={to} onChange={(e) => setTo(e.target.value)} disabled={Object.keys(sent).length > 0}
           className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm font-normal">
           <option value="">Choose…</option>
           {choices.map(p => (
@@ -425,55 +491,68 @@ export function DispatchForm({ farmerToken, batch, batches = [], onDone, onCance
       {isLivestock && choices.length === 0 && (
         <p className="text-xs text-red-600">No abattoirs are approved on Farm Passport yet — ask the admin to add yours.</p>
       )}
-      <label className="block text-xs font-semibold text-gray-700">Delivery
+      <label className="block text-xs font-semibold text-gray-700">Haulage
         <select value={via} onChange={(e) => setVia(e.target.value)}
           className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm font-normal">
-          <option value="">Direct (own delivery)</option>
+          <option value="">Own transport</option>
           {participants.filter(p => p.role === 'handler' && p.address !== to).map(p => (
             <option key={p.address} value={p.address}>via {p.name}</option>
           ))}
         </select>
       </label>
-      <div className="flex gap-4 items-end flex-wrap">
-        <label className="text-xs font-semibold text-gray-700">{isLivestock ? 'How many' : 'How much'} <Req />
+
+      {isLivestock ? (
+        <div className="bg-white border border-gray-200 rounded-lg p-3">
+          <p className="text-xs font-semibold text-gray-700">Animals in this load <Req /> <span className="font-normal text-gray-500">— tick each one going; live weight is optional</span></p>
+          <div className="mt-2 space-y-1.5">
+            {listed.map(b => {
+              const r = rowOf(b);
+              const cattle = b.species === 'Cattle';
+              return (
+                <div key={b.batchId} className={`flex items-center gap-2 flex-wrap text-sm rounded px-1.5 py-1 ${r.on ? 'bg-green-50' : ''}`}>
+                  <input type="checkbox" checked={!!r.on} disabled={!!sent[b.batchId]} onChange={(e) => setRow(b, 'on', e.target.checked)} className="accent-green-600" aria-label={`Send ${b.animalRef || b.batchId}`} />
+                  <span className="flex-1 min-w-[10rem]">
+                    <span className="font-mono text-xs">{b.animalRef || b.batchId}</span>{' '}
+                    <span className="text-xs text-gray-500">{b.species}{b.breed ? ` · ${b.breed}` : ''}{b.harvestDate ? ` · born ${new Date(b.harvestDate).toLocaleDateString('en-GB')}` : ''}</span>
+                    {sent[b.batchId] === 'done' && <span className="text-xs text-green-700 font-semibold"> ✓ sent</span>}
+                  </span>
+                  {r.on && (
+                    <>
+                      {cattle ? <span className="text-xs text-gray-500 w-20">1 head</span> : (
+                        <span className="flex items-center gap-1 w-20">
+                          <input type="number" min="1" step="1" max={left(b)} value={r.head ?? left(b)} onChange={(e) => setRow(b, 'head', e.target.value)}
+                            className="w-12 px-1 py-0.5 border border-gray-300 rounded text-xs" aria-label="Head" />
+                          <span className="text-xs text-gray-500">/{left(b)}</span>
+                        </span>
+                      )}
+                      <span className="flex items-center gap-1">
+                        <input type="number" min="0" step="any" value={r.weight || ''} onChange={(e) => setRow(b, 'weight', e.target.value)} placeholder={cattle ? '550' : '40'}
+                          className="w-16 px-1 py-0.5 border border-gray-300 rounded text-xs" aria-label="Approx. live weight" />
+                        <span className="text-xs text-gray-500">kg{cattle ? '' : ' each'}</span>
+                      </span>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {listed.length < candidates.length && (
+            <button type="button" onClick={() => setShowAll(true)} className="text-xs text-blue-600 hover:underline mt-1">Show all {candidates.length} animals</button>
+          )}
+          <p className="text-xs text-gray-500 mt-2">
+            {inLoad.length} batch{inLoad.length === 1 ? '' : 'es'} · {inLoad.reduce((n, b) => n + (headOf(b) || 0), 0)} head. Each becomes its own delivery, with the same FCI.
+            You're paid on the <strong>cold carcass weight</strong> from the abattoir's kill sheet; live weight is just for their information.
+          </p>
+        </div>
+      ) : (
+        <label className="block text-xs font-semibold text-gray-700">How much <Req />
           <span className="flex items-center gap-1 mt-1 font-normal">
-            {isCattle ? (
-              <span className="px-3 py-2 border border-gray-200 rounded-lg bg-white text-sm">1 <span className="text-xs text-gray-500">({batch.animalRef || 'this animal'})</span></span>
-            ) : (
-              <input type="number" step={isLivestock ? '1' : 'any'} min={isLivestock ? '1' : '0.001'} max={remaining} value={quantity}
-                onChange={(e) => setQuantity(e.target.value)} placeholder="Quantity"
-                className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-            )}
+            <input type="number" step="any" min="0.001" max={remaining} value={quantity}
+              onChange={(e) => setQuantity(e.target.value)} placeholder="Quantity"
+              className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
             <span className="text-sm text-gray-500">{batch.unit}</span>
           </span>
         </label>
-        {isLivestock && (
-          <label className="text-xs font-semibold text-gray-700">Approx. live weight <span className="font-normal text-gray-500">(optional{isCattle ? '' : ', average per animal'})</span>
-            <span className="flex items-center gap-1 mt-1 font-normal">
-              <input type="number" step="any" min="0" value={liveWeight} onChange={(e) => setLiveWeight(e.target.value)} placeholder={isCattle ? 'e.g. 550' : 'e.g. 40'}
-                className="w-24 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-              <span className="text-sm text-gray-500">kg</span>
-            </span>
-          </label>
-        )}
-      </div>
-      {isLivestock && (
-        <p className="text-xs text-gray-500">You're paid on the <strong>cold carcass weight</strong>, which the abattoir records from its kill sheet. Live weight is just for their information.</p>
-      )}
-
-      {others.length > 0 && !sentId && (
-        <div className="bg-white border border-gray-200 rounded-lg p-3">
-          <p className="text-xs font-semibold text-gray-700 mb-1">Sending more {isCattle ? 'cattle' : 'animals'} in the same load? <span className="font-normal text-gray-500">(same abattoir, same FCI)</span></p>
-          <div className="grid sm:grid-cols-2 gap-1">
-            {others.map(b => (
-              <label key={b.batchId} className="text-xs flex items-center gap-2">
-                <input type="checkbox" checked={!!also[b.batchId]} onChange={(e) => setAlso({ ...also, [b.batchId]: e.target.checked })} className="accent-green-600" />
-                <span><span className="font-mono">{b.animalRef || b.batchId}</span> <span className="text-gray-500">· {formatQty(Number(b.quantityRemaining ?? b.quantity), b.unit)}{b.productName ? ` · ${b.productName}` : ''}</span></span>
-              </label>
-            ))}
-          </div>
-          {extra.length > 0 && <p className="text-xs text-gray-500 mt-1">{extra.length + 1} deliveries will be recorded, one per batch, each with its own FCI.</p>}
-        </div>
       )}
 
       {preOrders.length > 0 && (
@@ -481,7 +560,7 @@ export function DispatchForm({ farmerToken, batch, batches = [], onDone, onCance
           <p className="font-semibold">📋 Cutting list: cafés have pre-ordered</p>
           <p>{Object.values(preOrders.reduce((g, o) => {
             const r = g[o.productName.toLowerCase()] = g[o.productName.toLowerCase()] || { name: o.productName, qty: 0, who: new Set() };
-            r.qty += o.quantity - (o.readyAtAbattoir || 0); r.who.add(o.restaurantName);
+            r.qty += o.quantity - (o.readyAtAbattoir || 0) - (o.readyAtFarm || 0); r.who.add(o.restaurantName);
             return g;
           }, {})).map(r => `${r.name} ${formatQty(Math.round(r.qty * 1000) / 1000, 'kg')} (${[...r.who].join(', ')})`).join(' · ')}</p>
           <p className="mt-1">The abattoir sees these in its panel when it cuts your animals.</p>
@@ -497,7 +576,8 @@ export function DispatchForm({ farmerToken, batch, batches = [], onDone, onCance
       <div className="flex gap-2 items-center">
         <button type="submit" disabled={busy || missing.length > 0}
           className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
-          {busy ? (progress || '⛓️ Recording…') : sentId ? 'Send the FCI again' : isLivestock ? `Send ${extra.length ? `${extra.length + 1} batches` : ''} to abattoir`.replace('  ', ' ') : 'Dispatch'}
+          {busy ? (progress || '⛓️ Recording…') : pending ? 'Try again'
+            : isLivestock ? `Send ${inLoad.length > 1 ? `${inLoad.length} batches` : ''} to abattoir`.replace('  ', ' ') : 'Dispatch'}
         </button>
         <button type="button" onClick={onCancel} className="text-sm text-gray-600 hover:underline">Cancel</button>
         <span className="text-xs text-gray-400 ml-auto"><Req /> required</span>

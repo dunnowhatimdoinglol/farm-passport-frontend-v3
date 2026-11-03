@@ -5,7 +5,7 @@ import { batchLink } from './walletHelpers';
 import NfcShare from './NfcShare';
 
 // farmerToken = the farmer's sign-in token (the farm is worked out from it on the server)
-function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuccess, onCancel }) {
+function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuccess, onCancel, onSendToAbattoir }) {
   const [batchId, setBatchId] = useState('');
   const [productType, setProductType] = useState('Vegetable');
   const [productName, setProductName] = useState('');
@@ -18,7 +18,9 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
   // Livestock (going to an abattoir): species, ear tag / flock mark, where it was born and reared — all on-chain
   const [species, setSpecies] = useState('Cattle');
   const [animalRef, setAnimalRef] = useState('');
-  const [earTags, setEarTags] = useState('');             // cattle: one ear tag per line → one batch per animal
+  // Cattle: one row per animal (its own ear tag + date of birth, optional breed) → one batch each
+  const [animals, setAnimals] = useState([{ tag: '', dob: '', breed: '' }]);
+  const [pasting, setPasting] = useState(null);           // text being pasted as a list, or null
   const [progress, setProgress] = useState(null);         // "Registering 2 of 5…"
   const [breed, setBreed] = useState('');
   const [bornIn, setBornIn] = useState('United Kingdom');
@@ -34,8 +36,19 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
   const units = ['kg', 'units', 'litres', 'dozen'];
   const isLivestock = productType === 'Livestock';
   const isCattle = isLivestock && species === 'Cattle';
-  const tags = earTags.split(/[\n,;]+/).map(t => t.trim().replace(/\s+/g, ' ')).filter(Boolean);
-  const dupTag = tags.find((t, i) => tags.findIndex(x => x.replace(/ /g, '').toUpperCase() === t.replace(/ /g, '').toUpperCase()) !== i);
+  const tidyTag = (t) => t.trim().replace(/\s+/g, ' ').toUpperCase();
+  const filled = animals.filter(a => a.tag.trim());
+  const tags = filled.map(a => tidyTag(a.tag));
+  const dupTag = tags.find((t, i) => tags.findIndex(x => x.replace(/ /g, '') === t.replace(/ /g, '')) !== i);
+  const noDob = filled.some(a => !a.dob);
+  const setAnimal = (i, k, v) => setAnimals(animals.map((a, j) => (j === i ? { ...a, [k]: v } : a)));
+  // "UK 123456 700123, 02/03/2024, Hereford" per line (date as DD/MM/YYYY or YYYY-MM-DD; breed optional)
+  const readList = (text) => text.split(/\n+/).map(l => l.trim()).filter(Boolean).map(l => {
+    const [tag, d = '', breed = ''] = l.split(/\s*[,;\t]\s*/);
+    const m = d.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
+    const dob = m ? `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` : (/^\d{4}-\d{2}-\d{2}$/.test(d) ? d : '');
+    return { tag, dob, breed };
+  });
   const SPECIES = { Cattle: 'Cattle', Sheep: 'Sheep / lambs', Pig: 'Pigs', Goat: 'Goats' };
   const refLabel = species === 'Cattle' ? 'Ear tag number' : species === 'Pig' ? 'Herd mark' : 'Flock mark';
   const refExample = species === 'Cattle' ? 'e.g. UK 123456 700123' : species === 'Pig' ? 'e.g. AB1234' : 'e.g. UK 0123456';
@@ -117,28 +130,31 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
   const registerCattle = async () => {
     if (!tags.length) { setError('Enter at least one ear tag'); return; }
     if (dupTag) { setError(`${dupTag} is in the list twice`); return; }
+    if (noDob) { setError('Enter a date of birth for each animal (it’s on its passport)'); return; }
     setLoading(true);
     const done = [];
     const failed = [];
-    for (const [i, tag] of tags.entries()) {
-      setProgress(`Registering ${i + 1} of ${tags.length}…`);
+    for (const [i, a] of filled.entries()) {
+      const tag = tidyTag(a.tag);
+      setProgress(`Registering ${i + 1} of ${filled.length}…`);
       const id = `COW-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
       try {
         const r = await axios.post('https://farm-passport-backend-v3.onrender.com/api/farmer/create-batch', {
           batchId: id, productType: 'Livestock', productName, quantity: 1, unit: 'head',
-          harvestDate: harvestDate || undefined, season: season === 'auto' ? null : season,
-          species, animalRef: tag, breed: breed || undefined, bornIn, rearedIn
+          harvestDate: a.dob, season: season === 'auto' ? null : season,
+          species, animalRef: tag, breed: a.breed.trim() || breed || undefined, bornIn, rearedIn
         }, { headers: { Authorization: `Bearer ${farmerToken}` } });
         done.push({ batchId: id, animalRef: tag, transactionHash: r.data.transactionHash, warning: r.data.originWarning || null });
       } catch (err) {
-        failed.push(`${tag}: ${err.response?.data?.error || err.message}`);
+        failed.push({ a, why: `${tag}: ${err.response?.data?.error || err.message}` });
       }
     }
     setProgress(null);
     setLoading(false);
-    if (failed.length) setError(`${done.length ? `${done.length} registered. ` : ''}Not registered — ${failed.join(' · ')}`);
+    if (failed.length) setError(`${done.length ? `${done.length} registered. ` : ''}Not registered — ${failed.map(f => f.why).join(' · ')}`);
     if (done.length) {
-      setEarTags(failed.map(f => f.split(':')[0]).join('\n'));
+      // Keep only the ones that didn't go through, so they can be fixed and tried again
+      setAnimals(failed.length ? failed.map(f => f.a) : [{ tag: '', dob: '', breed: '' }]);
       const qrUrl = done.length === 1 ? await QRCode.toDataURL(batchLink(done[0].batchId), { width: 300, margin: 2 }) : '';
       setQrCodeUrl(qrUrl);
       setCreatedBatch({ batchId: done[0].batchId, productName, transactionHash: done[0].transactionHash, list: done });
@@ -224,12 +240,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
                 <input value={animalRef} onChange={(e) => setAnimalRef(e.target.value)} required placeholder={refExample}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg font-mono" />
               </div>}
-              {isCattle && <div className="col-span-2 sm:col-span-1 row-span-2">
-                <label className="block text-xs font-medium text-gray-700 mb-1">Ear tags * <span className="text-gray-400 font-normal">— one per line</span></label>
-                <textarea value={earTags} onChange={(e) => setEarTags(e.target.value)} rows={4} required placeholder={'UK 123456 700123\nUK 123456 700124'}
-                  className={`w-full px-3 py-2 border rounded-lg font-mono text-sm ${dupTag ? 'border-red-500' : 'border-gray-300'}`} />
-                <p className={`text-xs mt-0.5 ${dupTag ? 'text-red-600' : 'text-gray-500'}`}>{dupTag ? `${dupTag} is listed twice` : `${tags.length} animal${tags.length === 1 ? '' : 's'}`}</p>
-              </div>}
+
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">Born in *</label>
                 <input value={bornIn} onChange={(e) => { setBornIn(e.target.value); if (rearedIn === bornIn) setRearedIn(e.target.value); }} required
@@ -241,14 +252,57 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
               </div>
               <div className="col-span-2">
-                <label className="block text-xs font-medium text-gray-700 mb-1">Breed <span className="text-gray-400 font-normal">— optional</span></label>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Breed <span className="text-gray-400 font-normal">— optional{isCattle ? ', for all of them unless a row says otherwise' : ''}</span></label>
                 <input value={breed} onChange={(e) => setBreed(e.target.value)} placeholder="e.g. Aberdeen Angus"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
               </div>
             </div>
+            {isCattle && (
+              <div className="bg-white border border-amber-200 rounded-lg p-3">
+                <div className="flex justify-between items-center mb-2 flex-wrap gap-2">
+                  <p className="text-sm font-semibold text-gray-800">The animals <span className="font-normal text-gray-500">({tags.length})</span></p>
+                  <button type="button" onClick={() => setPasting(pasting === null ? '' : null)} className="text-xs text-blue-600 hover:underline">
+                    {pasting === null ? '📋 Paste a list instead' : 'Back to the rows'}</button>
+                </div>
+                {pasting !== null ? (
+                  <div className="space-y-2">
+                    <textarea value={pasting} onChange={(e) => setPasting(e.target.value)} rows={5}
+                      placeholder={'One animal per line: ear tag, date of birth, breed (optional)\nUK 123456 700123, 02/03/2024, Hereford\nUK 123456 700124, 15/04/2024'}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg font-mono text-xs" />
+                    <button type="button" disabled={!pasting.trim()} onClick={() => { setAnimals(readList(pasting)); setPasting(null); }}
+                      className="text-sm bg-gray-700 text-white px-3 py-1.5 rounded-lg disabled:bg-gray-300">Use this list ({readList(pasting).length})</button>
+                    <p className="text-xs text-gray-500">You can copy the ear tags and dates of birth from your herd records or a spreadsheet.</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="hidden sm:flex gap-2 text-xs font-semibold text-gray-600 mb-1">
+                      <span className="flex-1">Ear tag *</span><span className="w-40">Date of birth *</span><span className="w-36">Breed (if different)</span><span className="w-4" />
+                    </div>
+                    {animals.map((a, i) => {
+                      const t = tidyTag(a.tag);
+                      const dup = a.tag.trim() && tags.filter(x => x.replace(/ /g, '') === t.replace(/ /g, '')).length > 1;
+                      return (
+                        <div key={i} className="flex gap-2 items-center mb-2 flex-wrap">
+                          <input value={a.tag} onChange={(e) => setAnimal(i, 'tag', e.target.value)} placeholder="UK 123456 700123" aria-label="Ear tag"
+                            className={`flex-1 min-w-[10rem] px-2 py-1.5 border rounded font-mono text-sm ${dup ? 'border-red-500 bg-red-50' : 'border-gray-300'}`} />
+                          <input type="date" value={a.dob} max={today} onChange={(e) => setAnimal(i, 'dob', e.target.value)} aria-label="Date of birth"
+                            className={`w-40 px-2 py-1.5 border rounded text-sm ${a.tag.trim() && !a.dob ? 'border-amber-400' : 'border-gray-300'}`} />
+                          <input value={a.breed} onChange={(e) => setAnimal(i, 'breed', e.target.value)} placeholder={breed || 'e.g. Hereford'} aria-label="Breed"
+                            className="w-36 px-2 py-1.5 border border-gray-300 rounded text-sm" />
+                          <span className="w-4">{animals.length > 1 && <button type="button" onClick={() => setAnimals(animals.filter((_, j) => j !== i))} className="text-xs text-red-600" aria-label="Remove animal">✕</button>}</span>
+                        </div>
+                      );
+                    })}
+                    <button type="button" onClick={() => setAnimals([...animals, { tag: '', dob: animals[animals.length - 1]?.dob || '', breed: '' }])}
+                      className="text-xs text-blue-600 hover:underline">+ another animal</button>
+                    {dupTag && <p className="text-xs text-red-600 mt-1">{dupTag} is listed twice.</p>}
+                  </>
+                )}
+              </div>
+            )}
             <p className="text-xs text-amber-800">
               {species === 'Cattle'
-                ? 'Cattle are tracked one by one (each has its own ear tag and passport), so each animal becomes its own batch. Paste several ear tags to register them all at once with the same details.'
+                ? 'Cattle are tracked one by one (each has its own ear tag and passport), so each animal becomes its own batch with its own date of birth. Add several rows to register them all at once.'
                 : 'Animals from the same flock / herd going to slaughter together can be one batch.'}
               {' '}The ear tag / flock mark and countries are public (they're printed on meat labels by law).
             </p>
@@ -311,7 +365,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
           </div>
 
         {/* Dates — recorded on the blockchain */}
-        <div className="grid grid-cols-2 gap-4">
+        {!isCattle && <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">{isLivestock ? 'Date of birth' : 'Harvest date'}</label>
             <input
@@ -321,7 +375,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
               onChange={(e) => setHarvestDate(e.target.value)}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
             />
-            <p className="text-xs text-gray-500 mt-1">{isLivestock ? 'For a group: the oldest animal\'s, roughly' : 'For meat: slaughter / processing date'}</p>
+            <p className="text-xs text-gray-500 mt-1">{isLivestock ? 'For a group: the oldest animal\'s, roughly' : 'When it was picked / harvested'}</p>
           </div>
           {!isLivestock && <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -336,7 +390,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
             />
             <p className="text-xs text-gray-500 mt-1">Cafés and customers will see this</p>
           </div>}
-        </div>
+        </div>}
 
         {/* Price field (optional) — not for live animals */}
         {!isLivestock && <div>
@@ -390,7 +444,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
 
         <button
           type="submit"
-          disabled={loading || (isCattle && (!tags.length || !!dupTag))}
+          disabled={loading || (isCattle && (!tags.length || !!dupTag || noDob))}
           className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed"
         >
           {loading ? (progress || 'Creating Batch (Gasless)...')
@@ -478,6 +532,14 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
               </div>
             )}
 
+            {createdBatch.list?.length > 0 && onSendToAbattoir && (
+              <button
+                onClick={() => { const ids = createdBatch.list.map(c => c.batchId); handleClose(); onSendToAbattoir(ids); }}
+                className="w-full mb-3 bg-red-700 text-white py-3 rounded-lg hover:bg-red-800 transition font-semibold"
+              >
+                🐄 Send {createdBatch.list.length === 1 ? 'it' : `these ${createdBatch.list.length}`} to an abattoir now
+              </button>
+            )}
             <button
               onClick={handleClose}
               className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition font-semibold"

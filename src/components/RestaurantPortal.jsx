@@ -802,8 +802,8 @@ function OrderStock({ authHeader, approved }) {
               <div key={o.id} className="py-3 flex justify-between gap-3 flex-wrap">
                 <div>
                   <p className="font-semibold text-gray-800">{o.isMeat ? '🥩 ' : ''}{formatQty(o.quantitySent ?? o.quantity, o.unit)} {o.productName} — {o.farmName}{o.isDeal ? ' 🏷️' : ''}</p>
-                  {o.isMeat && o.status === 'requested' && <p className="text-xs text-gray-600">{o.preOrder ? '📋 Pre-order: the abattoir sends it once your cuts are ready' : '🔪 Ready at the abattoir: they send it to you'}</p>}
-                  {o.isMeat && o.sentByName && <p className="text-xs text-gray-600">🔪 Sent by {o.sentByName}</p>}
+                  {o.isMeat && o.status === 'requested' && <p className="text-xs text-gray-600">{o.preOrder ? '📋 Pre-order: sent once your cuts are ready' : '🔪 Ready: the farm or its abattoir sends it to you'}</p>}
+                  {o.isMeat && o.sentByName && o.sentBy !== o.farmerAddress && <p className="text-xs text-gray-600">🔪 Sent by {o.sentByName}</p>}
                   {o.quantitySent != null && o.quantitySent !== o.quantity && <p className="text-xs text-amber-700">You asked for {formatQty(o.quantity, o.unit)} — the farm sent {formatQty(o.quantitySent, o.unit)}</p>}
                   <p className="text-xs text-gray-500">
                     {new Date(o.createdAt).toLocaleDateString('en-GB')}{o.neededUntil ? ` · needs to last until ${day(o.neededUntil)}` : ''}{o.note ? ` · "${o.note}"` : ''}
@@ -908,7 +908,7 @@ function MeatOrder({ authHeader, approved, onOrdered }) {
     <div className="space-y-4">
       <div className="bg-white rounded-lg shadow-lg p-6">
         <h3 className="text-lg font-bold text-gray-800 mb-1">🥩 Order meat from a farm</h3>
-        <p className="text-sm text-gray-500 mb-4">Pick a farm and the animal, then the cuts. Ready cuts come from the abattoir that cut them; others can be pre-ordered from the farm's next animal.</p>
+        <p className="text-sm text-gray-500 mb-4">Pick a farm and the animal, then the cuts. Ready cuts are sent by the farm or the abattoir holding them; others can be pre-ordered from the farm's next animal.</p>
         {farms.length === 0 && <p className="text-sm text-gray-500">No farms are selling meat yet.</p>}
 
         {/* 1. Farm */}
@@ -952,10 +952,14 @@ function MeatOrder({ authHeader, approved, onOrdered }) {
                     </div>
                     <p className="text-xs mt-0.5">
                       {c.inStock > 0
-                        ? <span className="text-green-700 font-semibold">✅ {formatQty(c.inStock, 'kg')} ready{c.useByFrom ? ` · use by ${day(c.useByFrom)}` : ''}</span>
+                        ? <span className="text-green-700 font-semibold">✅ {formatQty(c.inStock, 'kg')} ready{c.useByFrom ? ` · use by ${day(c.useByFrom)}` : ''}
+                            <span className="block font-normal text-gray-500">
+                              {[c.atFarm > 0 && `${formatQty(c.atFarm, 'kg')} at the farm`, c.atAbattoir > 0 && `${formatQty(c.atAbattoir, 'kg')} at ${c.abattoirs?.join(', ') || 'the abattoir'}`].filter(Boolean).join(' · ')}
+                            </span></span>
                         : c.preOrder ? <span className="text-amber-700 font-semibold">📋 Pre-order from the next {sp.label.toLowerCase()}</span>
                         : <span className="text-gray-500">Not available right now</span>}
                     </p>
+                    {c.avgPieceKg && <p className="text-xs text-gray-600">≈ {Math.round(c.avgPieceKg * 1000)} g per piece</p>}
                     {c.note && <p className="text-xs text-gray-500 italic">{c.note}</p>}
                     {c.allergens?.length > 0 && <p className="text-xs text-amber-800">⚠️ Contains: {c.allergens.join(', ')}</p>}
                     <div className="mt-auto pt-2 flex items-center gap-1">

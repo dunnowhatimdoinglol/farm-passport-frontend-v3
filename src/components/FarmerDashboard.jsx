@@ -14,6 +14,8 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
   const [showCreateBatch, setShowCreateBatch] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [dispatchBatchId, setDispatchBatchId] = useState(null);   // which batch's "Send" form is open
+  const [pickedAnimals, setPickedAnimals] = useState({});          // livestock batches ticked to go to an abattoir together
+  const [sendMany, setSendMany] = useState(false);
   const [priceEdit, setPriceEdit] = useState({});   // batchId → price being typed (only while editing)
   const [priceSaving, setPriceSaving] = useState(null);
   const [priceError, setPriceError] = useState({});
@@ -462,6 +464,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
             setSeason={setSeason}
             onSuccess={handleBatchCreated}
             onCancel={() => setShowCreateBatch(false)}
+            onSendToAbattoir={(ids) => { setPickedAnimals(Object.fromEntries(ids.map(id => [id, true]))); setSendMany(true); setDispatchBatchId(null); }}
           />
         </div>
       )}
@@ -471,6 +474,39 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
         <h3 className="text-xl font-bold text-gray-800 mb-4">
           Your Batches ({batches.length})
         </h3>
+
+        {/* Send several animals to an abattoir in one load */}
+        {(() => {
+          const sendable = batches.filter(b => b.productType === 'Livestock' && !b.recalled && Number(b.quantityRemaining ?? b.quantity) > 0);
+          if (!approved || sendable.length < 2) return null;
+          const picked = sendable.filter(b => pickedAnimals[b.batchId]);
+          return (
+            <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-3">
+              {!sendMany ? (
+                <div className="flex items-center gap-3 flex-wrap">
+                  <p className="text-sm text-amber-900 flex-1 min-w-[12rem]">
+                    🐄 {picked.length ? <><strong>{picked.length}</strong> animal batch{picked.length === 1 ? '' : 'es'} ticked</> : 'Tick animals below to send several to an abattoir in one load'}
+                  </p>
+                  <button onClick={() => setPickedAnimals(picked.length === sendable.length ? {} : Object.fromEntries(sendable.map(b => [b.batchId, true])))}
+                    className="text-xs text-amber-900 underline">{picked.length === sendable.length ? 'Untick all' : `Tick all ${sendable.length}`}</button>
+                  <button disabled={!picked.length} onClick={() => { setSendMany(true); setDispatchBatchId(null); }}
+                    className="bg-red-700 text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-red-800 disabled:bg-gray-400">
+                    Send {picked.length || ''} to an abattoir
+                  </button>
+                </div>
+              ) : picked.length > 0 ? (
+                <DispatchForm
+                  farmerToken={farmerToken}
+                  batch={picked[0]}
+                  batches={batches}
+                  preselected={picked.map(b => b.batchId)}
+                  onCancel={() => setSendMany(false)}
+                  onDone={() => { setSendMany(false); setPickedAnimals({}); refreshAll(); }}
+                />
+              ) : <p className="text-sm text-amber-900">⏳ Loading the new animals…</p>}
+            </div>
+          );
+        })()}
 
         {batches.length === 0 ? (
           <div className="text-center py-12">
@@ -513,11 +549,15 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
               return (
                 <div
                   key={index}
-                  className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition"
+                  className={`border rounded-lg p-4 hover:shadow-md transition ${pickedAnimals[batchId] ? 'border-red-400 ring-1 ring-red-300' : 'border-gray-200'}`}
                 >
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-2">
+                        {approved && productType === 'Livestock' && !batch.recalled && Number(batch.quantityRemaining ?? batch.quantity) > 0 && (
+                          <input type="checkbox" checked={!!pickedAnimals[batchId]} onChange={(e) => setPickedAnimals({ ...pickedAnimals, [batchId]: e.target.checked })}
+                            className="h-5 w-5 accent-red-700" aria-label={`Tick ${batch.animalRef || batchId} to send to an abattoir`} />
+                        )}
                         <span className="text-2xl">{getEmoji(productType)}</span>
                         <div>
                           <h4 className="font-bold text-gray-800 text-lg">
@@ -541,7 +581,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
                       
                       {(batch.harvestDate || batch.useBy) && (
                         <p className="text-sm text-gray-600">
-                          {batch.harvestDate && <>Harvested {new Date(batch.harvestDate).toLocaleDateString('en-GB')}</>}
+                          {batch.harvestDate && <>{productType === 'Livestock' ? 'Born' : batch.processKind || batch.madeBy ? 'Made' : 'Harvested'} {new Date(batch.harvestDate).toLocaleDateString('en-GB')}</>}
                           {batch.useBy && (
                             <span className={new Date(batch.useBy) < new Date() ? 'text-red-600 font-semibold' : ''}>
                               {batch.harvestDate ? ' · ' : ''}Use by {new Date(batch.useBy).toLocaleDateString('en-GB')}
