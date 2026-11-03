@@ -5,6 +5,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { FarmerOrders, DispatchForm, FarmerShipments, FarmerReturns, FarmerMeatList } from './FarmerSupply';
 import { formatQty, batchLink } from './walletHelpers';
 import NfcShare from './NfcShare';
+import { ChainHelp } from './ChainProof';
 
 // farmerToken = sign-in token from FarmerPortal (the private key is never sent to the server)
 function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogout }) {
@@ -434,6 +435,9 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
           </div>
         </div>
       </div>
+
+      {/* How to check records on the blockchain */}
+      <ChainHelp who="farm" className="mb-6" />
 
       {/* Orders from restaurants */}
       <FarmerOrders farmerToken={farmerToken} approved={approved} refreshKey={refreshTrigger} onChanged={refreshAll} />

@@ -8,6 +8,7 @@ import { shortWhen, receiptLink } from './walletHelpers';
 import NfcShare from './NfcShare';
 import { PhotoPicker, DeliveryPhotoButton } from './DeliveryPhoto';
 import { TermsCheck } from './FarmerSupply';
+import { TxLink, ChainHelp } from './ChainProof';
 
 // Prices are only shown to the farm and the restaurant — never on the customer journey
 const gbp = (v) => (v === null || v === undefined || isNaN(Number(v))) ? null : `£${Number(v).toFixed(2)}`;
@@ -450,7 +451,7 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
     return shell(<OrderStock authHeader={authHeader} approved={approved} />);
   }
   if (tab === 'deliveries') {
-    return shell(<Deliveries authHeader={authHeader} approved={approved} onReceived={fetchStock} />);
+    return shell(<><Deliveries authHeader={authHeader} approved={approved} onReceived={fetchStock} /><ChainHelp who="cafe" className="mt-6" /></>);
   }
 
   // ─── NEW RECEIPT: build the bill ───
@@ -685,6 +686,8 @@ function OrderStock({ authHeader, approved }) {
 
   const STATUS = {
     requested:  ['Waiting for the farm', 'bg-yellow-100 text-yellow-800'],
+    part_sent:  ['Part sent', 'bg-amber-200 text-amber-900'],
+    closed_short: ['Part sent · closed', 'bg-gray-200 text-gray-700'],
     dispatched: ['On its way', 'bg-blue-100 text-blue-700'],
     delivered:  ['Delivered', 'bg-green-100 text-green-700'],
     declined:   ['Declined', 'bg-gray-100 text-gray-600'],
@@ -799,19 +802,21 @@ function OrderStock({ authHeader, approved }) {
         ) : (
           <div className="divide-y divide-gray-100">
             {orders.map(o => (
-              <div key={o.id} className="py-3 flex justify-between gap-3 flex-wrap">
-                <div>
-                  <p className="font-semibold text-gray-800">{o.isMeat ? '🥩 ' : ''}{formatQty(o.quantitySent ?? o.quantity, o.unit)} {o.productName} — {o.farmName}{o.isDeal ? ' 🏷️' : ''}</p>
+              <div key={o.id} className="py-3 flex justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-gray-800">{o.isMeat ? '🥩 ' : ''}{formatQty(o.status === 'part_sent' ? o.quantity : (o.quantitySent ?? o.quantity), o.unit)} {o.productName} — {o.farmName}{o.isDeal ? ' 🏷️' : ''}</p>
                   {o.isMeat && o.status === 'requested' && <p className="text-xs text-gray-600">{o.preOrder ? '📋 Pre-order: sent once your cuts are ready' : '🔪 Ready: the farm or its abattoir sends it to you'}</p>}
                   {o.isMeat && o.sentByName && o.sentBy !== o.farmerAddress && <p className="text-xs text-gray-600">🔪 Sent by {o.sentByName}</p>}
-                  {o.quantitySent != null && o.quantitySent !== o.quantity && <p className="text-xs text-amber-700">You asked for {formatQty(o.quantity, o.unit)} — the farm sent {formatQty(o.quantitySent, o.unit)}</p>}
+                  {o.status === 'part_sent' && <p className="text-xs text-amber-800 font-semibold">{formatQty(o.quantitySent, o.unit)} of {formatQty(o.quantity, o.unit)} sent so far · {formatQty(o.outstanding, o.unit)} still to come</p>}
+                  {o.status === 'closed_short' && <p className="text-xs text-amber-800">You asked for {formatQty(o.quantity, o.unit)}, {formatQty(o.quantitySent || 0, o.unit)} was sent. The rest isn't coming{o.farmerNote ? `: "${o.farmerNote}"` : ''}</p>}
+                  {o.quantitySent != null && o.quantitySent !== o.quantity && !['part_sent', 'closed_short'].includes(o.status) && <p className="text-xs text-amber-700">You asked for {formatQty(o.quantity, o.unit)} — the farm sent {formatQty(o.quantitySent, o.unit)}</p>}
                   <p className="text-xs text-gray-500">
                     {new Date(o.createdAt).toLocaleDateString('en-GB')}{o.neededUntil ? ` · needs to last until ${day(o.neededUntil)}` : ''}{o.note ? ` · "${o.note}"` : ''}
                   </p>
                   {o.dispatches?.length > 1 && (
                     <p className="text-xs text-gray-600">Coming as {o.dispatches.length} deliveries: {o.dispatches.map(d => `${formatQty(d.quantity, o.unit)} (use by ${d.useBy ? day(d.useBy) : '—'})`).join(' + ')}</p>
                   )}
-                  {o.farmerNote && <p className="text-xs text-gray-600 italic">Farm: "{o.farmerNote}"</p>}
+                  {o.farmerNote && o.status !== 'closed_short' && <p className="text-xs text-gray-600 italic">Farm: "{o.farmerNote}"</p>}
                   {o.total != null && (
                     <p className="text-xs text-gray-700">
                       💷 {o.unitPrice != null && <>{gbp(o.unitPrice)}/{o.unit}</>}
@@ -821,17 +826,21 @@ function OrderStock({ authHeader, approved }) {
                   )}
                   <TermsCheck order={o} token={(authHeader?.headers?.Authorization || '').replace('Bearer ', '')} />
                 </div>
-                <div className="text-right space-y-1">
+                <div className="text-right space-y-1 shrink-0">
                   {(() => {
-                    const st = o.status === 'dispatched' && o.shipmentStatus === 'delivered' ? 'delivered' : o.status;
+                    const st = o.status === 'dispatched' && o.shipmentStatus === 'delivered' ? 'delivered' : o.status;   // part_sent / closed_short keep their own label
                     return (
                       <span className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full ${STATUS[st]?.[1] || ''}`}>
                         {o.isMeat && st === 'requested' ? (o.preOrder ? 'Pre-ordered' : 'Being packed') : (STATUS[st]?.[0] || st)}
                       </span>
                     );
                   })()}
-                  {o.status === 'dispatched' && (
+                  {['dispatched', 'part_sent', 'closed_short'].includes(o.status) && (
                     <p className="text-xs text-gray-500">{o.paymentStatus === 'paid' ? '💷 Paid' : 'Payment due'}</p>
+                  )}
+                  {o.status === 'part_sent' && (
+                    <button onClick={() => window.confirm(`Cancel the ${formatQty(o.outstanding, o.unit)} still to come? What's already been sent stays.`) && cancelOrder(o)}
+                      className="block text-xs text-red-600 hover:underline ml-auto">Cancel the rest</button>
                   )}
                   {o.status === 'requested' && (
                     <button onClick={() => cancelOrder(o)} className="block text-xs text-red-600 hover:underline ml-auto">Cancel</button>
@@ -1248,7 +1257,7 @@ function Deliveries({ authHeader, approved, onReceived }) {
             {incoming.map(s => (
               <div key={s.shipmentId} className="border-2 border-blue-200 bg-blue-50 rounded-lg p-4">
                 <p className="font-bold text-gray-800">{formatQty(s.quantitySent, s.unit)} {s.productName}</p>
-                <p className="text-sm text-gray-600">from {s.fromName}{s.carrierName ? ` via ${s.carrierName}` : ''} · delivery #{s.shipmentId}</p>
+                <p className="text-sm text-gray-600">from {s.fromName}{s.carrierName ? ` via ${s.carrierName}` : ''} · delivery #{s.shipmentId} <TxLink hash={s.sentTxHash} label="Sent" className="ml-1" /></p>
                 {s.dispatchNotes && <p className="text-sm text-gray-600 italic">{s.fromName}: "{s.dispatchNotes}"</p>}
                 {s.handlingSteps?.length > 0 && (
                   <div className="mt-2 bg-white border border-teal-200 rounded-lg p-2">
@@ -1334,7 +1343,7 @@ function Deliveries({ authHeader, approved, onReceived }) {
                 <div className="min-w-0">
                   <p className="font-semibold text-gray-800">{s.productName} — {s.fromName}{s.kind === 'return' ? ' (returned to you)' : ''}</p>
                   <p className="text-xs text-gray-500">
-                    #{s.shipmentId} · received {formatQty(s.quantityReceived, s.unit)} of {formatQty(s.quantitySent, s.unit)}
+                    #{s.shipmentId} · received {formatQty(s.quantityReceived, s.unit)} of {formatQty(s.quantitySent, s.unit)} <TxLink hash={s.receivedTxHash} label="Received" className="ml-1" />
                     {s.quantityRejected > 0 && <> · ↩️ {formatQty(s.quantityRejected, s.unit)} refused</>}
                     {s.shortfall > 0 && <span className="text-orange-600 font-semibold"> · ⚠️ {formatQty(s.shortfall, s.unit)} missing</span>}
                     {s.wasted > 0 && <> · 🗑️ {formatQty(s.wasted, s.unit)} written off</>}

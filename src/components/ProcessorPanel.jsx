@@ -8,6 +8,7 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { API_BASE, EXPLORER, formatQty, metaMaskSign, walletSignIn, walletError } from './walletHelpers';
+import { TxLink, ChainHelp } from './ChainProof';
 
 const TEMPLATE = [
   'animal,head,kill_number,kill_date,cold_weight_kg,category,conformation,fat_class,status,notes',
@@ -175,6 +176,7 @@ export default function ProcessorPanel({ account, participants }) {
           </p>
         )}
       </div>
+      <ChainHelp who="abattoir" />
       {error && <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-red-700 text-sm font-semibold">⚠️ {error}</div>}
       {message && <div className="bg-green-50 border border-green-300 rounded-lg p-3 text-green-700 text-sm font-semibold">✅ {message}</div>}
 
@@ -319,7 +321,7 @@ function AnimalsIn({ data, auth, busy, post }) {
         {data.animalsHere.map(s => (
           <div key={s.shipmentId} className="border border-gray-200 rounded-lg p-3">
             <p className="font-semibold text-gray-800">{formatQty(s.available, 'head')} {s.productName} in lairage <span className="text-gray-500 font-normal">from {s.fromName}</span></p>
-            <p className="text-xs text-gray-600">{s.species} · <span className="font-mono">{s.animalRef}</span> · arrived {new Date(s.deliveredAt).toLocaleDateString('en-GB')}</p>
+            <p className="text-xs text-gray-600">{s.species} · <span className="font-mono">{s.animalRef}</span> · arrived {new Date(s.deliveredAt).toLocaleDateString('en-GB')} <TxLink hash={s.receivedTxHash} label="Arrival" className="ml-1" /></p>
             <FciBadge s={s} /><FciView id={s.shipmentId} />
           </div>
         ))}
@@ -498,7 +500,7 @@ function MadeHere({ data, post, postMany, busy, participants }) {
             <div className="min-w-0">
               <p className={`font-semibold ${finished ? 'text-gray-500' : 'text-gray-800'}`}>🥩 {b.productName}
                 <span className="font-normal text-gray-500"> · {refOf(b)}{b.grading?.conformation ? ` · grade ${b.grading.conformation}${b.grading.fatClass || ''}` : ''}</span></p>
-              <p className="text-xs text-gray-500">{b.animalRef ? `${b.animalRef} · ` : ''}<span className="font-mono text-gray-400">{b.batchId}</span></p>
+              <p className="text-xs text-gray-500">{b.animalRef ? `${b.animalRef} · ` : ''}<span className="font-mono text-gray-400">{b.batchId}</span> <TxLink hash={b.txHash} label="Kill record" className="ml-1" /></p>
               {b.recalled && <p className="text-xs text-red-700 font-semibold">🚨 Recalled{b.recallReason ? `: ${b.recallReason}` : ''}</p>}
             </div>
             {finished ? <p className="text-xs text-gray-500 font-semibold shrink-0">{b.recalled ? '' : '✔ All cut'}</p> : <LeftBar b={b} />}
@@ -538,7 +540,7 @@ function MadeHere({ data, post, postMany, busy, participants }) {
           <div className="flex-1 min-w-0 flex justify-between gap-3">
             <div className="min-w-0">
               <p className="font-semibold text-gray-800 text-sm">{b.productName}</p>
-              <p className="text-xs text-gray-500">{refOf(b)}{b.pieces ? ` · ${b.pieces} pieces (≈${Math.round((b.quantity / b.pieces) * 1000)} g each)` : ''}{b.useBy ? ` · use by ${ukDate(b.useBy)}` : ''} · <span className="font-mono text-gray-400">{b.batchId}</span></p>
+              <p className="text-xs text-gray-500">{refOf(b)}{b.pieces ? ` · ${b.pieces} pieces (≈${Math.round((b.quantity / b.pieces) * 1000)} g each)` : ''}{b.useBy ? ` · use by ${ukDate(b.useBy)}` : ''} · <span className="font-mono text-gray-400">{b.batchId}</span> <TxLink hash={b.txHash} label="Cutting record" className="ml-1" /></p>
               {b.allergens?.length > 0 && <p className="text-xs text-amber-800">⚠️ Contains: {b.allergens.join(', ')}</p>}
             </div>
             <LeftBar b={b} small />
@@ -597,7 +599,7 @@ function MadeHere({ data, post, postMany, busy, participants }) {
               <div key={b.batchId} className="py-2 flex justify-between gap-3 items-start">
                 <div className="min-w-0 text-sm">
                   <p className="font-semibold text-gray-800">{b.kind === 'Slaughter' ? '🥩 ' : ''}{b.productName} <span className="font-normal text-gray-500">· {b.farmName || 'several farms'}</span></p>
-                  <p className="text-xs text-gray-500">{refOf(b)}{b.animalRef ? ` · ${b.animalRef}` : ''} · made {ukDate(b.createdAt)} · <span className="font-mono">{b.batchId}</span></p>
+                  <p className="text-xs text-gray-500">{refOf(b)}{b.animalRef ? ` · ${b.animalRef}` : ''} · made {ukDate(b.createdAt)} · <span className="font-mono">{b.batchId}</span> <TxLink hash={b.txHash} className="ml-1" /></p>
                   {b.parents?.length > 0 && b.kind !== 'Slaughter' && (
                     <p className="text-xs text-gray-400">from {b.parents.map(id => byId[id] ? `${byId[id].productName}${byId[id].lotRef ? ` (${byId[id].lotRef})` : ''}` : id).join(' + ')}</p>
                   )}
@@ -1009,55 +1011,97 @@ function CutForm({ first, all, data, post, busy, onClose }) {
 
 // ── 4. Café orders to send ──
 // Cafés order a farm's cuts; the abattoir holding them sends them (soonest use-by first), with the agreed terms fingerprinted.
+// Part of an order can be sent: the rest stays open (back-order) or is closed with a message to the café.
 function OrdersToSend({ data, post, busy, participants }) {
-  const [form, setForm] = useState({});        // orderId → { via, notes }
-  const ready = data.orders.filter(o => o.ready);
-  const waiting = data.orders.filter(o => !o.ready);
-  const f = (id) => form[id] || { via: '', notes: '' };
+  const [form, setForm] = useState({});        // orderId → { via, notes, qty: { batchId: '2' }, close, note }
+  const [openId, setOpenId] = useState(null);  // a waiting order whose "send what's here" form is open
+  const sendable = (o) => o.suggestion.allocations.length > 0;
+  const ready = data.orders.filter(o => o.ready || openId === o.id);
+  const waiting = data.orders.filter(o => !o.ready && openId !== o.id);
+  const f = (id) => form[id] || { via: '', notes: '', qty: {}, close: false, note: '' };
+  const setF = (id, patch) => setForm({ ...form, [id]: { ...f(id), ...patch } });
   const gbp = (v) => `£${Number(v).toFixed(2)}`;
+  const sentLine = (o) => (o.quantitySent > 0 ? ` · ${formatQty(o.quantitySent, o.unit)} of ${formatQty(o.quantity, o.unit)} already sent` : '');
+
+  const closeRest = (o) => {
+    const note = window.prompt(`Close the remaining ${formatQty(o.outstanding, o.unit)} of ${o.productName} for ${o.restaurantName}?\n\nMessage to the café (e.g. no more to cut this week):`);
+    if (note !== null) post(`c${o.id}`, `/processor/orders/${o.id}/close-rest`, { note: note.trim() }, `Rest of the ${o.productName} order closed`);
+  };
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
       <h3 className="text-lg font-bold text-gray-800 mb-1">4. Café orders to send</h3>
-      <p className="text-sm text-gray-500 mb-3">Cafés order cuts from a farm's meat list. When the cuts are here, send them straight to the café.</p>
+      <p className="text-sm text-gray-500 mb-3">Cafés order cuts from a farm's meat list. When the cuts are here, send them straight to the café, all at once or part now and the rest later.</p>
       {data.orders.length === 0 && <p className="text-sm text-gray-500">No café orders for meat you're holding.</p>}
 
       {ready.length > 0 && (
         <div className="space-y-3 mb-4">
           <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">✅ Ready to send ({ready.length})</p>
-          {ready.map(o => (
-            <div key={o.id} className="border-2 border-green-200 bg-green-50 rounded-lg p-3 space-y-2">
-              <div className="flex justify-between gap-2 flex-wrap">
-                <div>
-                  <p className="font-semibold text-gray-800">{formatQty(o.quantity, o.unit)} {o.productName} → {o.restaurantName}</p>
-                  <p className="text-xs text-gray-600">
-                    {o.farmName}'s meat{o.preOrder ? ' · pre-order' : ''}{o.neededUntil ? ` · needed by ${ukDate(o.neededUntil)}` : ''} · ordered {ukDate(o.createdAt)}
-                  </p>
-                  {o.note && <p className="text-xs italic text-gray-600">"{o.note}"</p>}
+          {ready.map(o => {
+            const F = f(o.id);
+            const qtyOf = (a) => Number(F.qty[a.batchId] ?? a.quantity) || 0;
+            const sending = round3(o.suggestion.allocations.reduce((n, a) => n + qtyOf(a), 0));
+            const left = o.outstanding ?? o.quantity;
+            const bad = o.suggestion.allocations.some(a => qtyOf(a) > a.remaining) || sending > left;
+            return (
+              <div key={o.id} className="border-2 border-green-200 bg-green-50 rounded-lg p-3 space-y-2">
+                <div className="flex justify-between gap-2 flex-wrap">
+                  <div>
+                    <p className="font-semibold text-gray-800">{formatQty(left, o.unit)} {o.productName} → {o.restaurantName}</p>
+                    <p className="text-xs text-gray-600">
+                      {o.farmName}'s meat{o.preOrder ? ' · pre-order' : ''}{o.neededUntil ? ` · needed by ${ukDate(o.neededUntil)}` : ''} · ordered {ukDate(o.createdAt)}{sentLine(o)}
+                    </p>
+                    {o.note && <p className="text-xs italic text-gray-600">"{o.note}"</p>}
+                  </div>
+                  {o.unitPrice !== null && <p className="text-sm text-gray-700 text-right">{gbp(o.unitPrice)}/{o.unit}<br /><span className="font-semibold">{gbp(o.unitPrice * sending)}</span></p>}
                 </div>
-                {o.unitPrice !== null && <p className="text-sm text-gray-700 text-right">{gbp(o.unitPrice)}/{o.unit}<br /><span className="font-semibold">{gbp(o.unitPrice * o.quantity)}</span></p>}
+                <div className="text-xs text-gray-700 bg-white border border-green-100 rounded p-2 space-y-1">
+                  <p className="font-semibold">Send from (soonest use-by first) — change the amounts to send less:</p>
+                  {o.suggestion.allocations.map(a => (
+                    <div key={a.batchId} className="flex items-center gap-2 flex-wrap">
+                      <input type="number" step="any" min="0" max={a.remaining} value={F.qty[a.batchId] ?? String(a.quantity)}
+                        onChange={(e) => setF(o.id, { qty: { ...F.qty, [a.batchId]: e.target.value } })}
+                        className={`w-20 px-2 py-0.5 border rounded ${qtyOf(a) > a.remaining ? 'border-red-500' : 'border-gray-300'}`} aria-label="Kg to send" />
+                      <span>{o.unit} from <span className="font-mono">{a.batchId}</span>{a.lotRef ? ` · lot ${a.lotRef}` : ''}{a.useBy ? ` · use by ${ukDate(a.useBy)}` : ''}{a.allergens?.length ? ` · contains ${a.allergens.join(', ')}` : ''}</span>
+                    </div>
+                  ))}
+                  {o.suggestion.shortBy > 0 && <p className="text-amber-700">Only {formatQty(round3(left - o.suggestion.shortBy), o.unit)} here: {formatQty(o.suggestion.shortBy, o.unit)} short.</p>}
+                </div>
+                {sending > 0 && sending < left && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-sm space-y-1">
+                    <p className="font-semibold text-amber-900">That leaves {formatQty(round3(left - sending), o.unit)}. What happens to it?</p>
+                    <label className="flex items-start gap-2"><input type="radio" className="mt-1" checked={!F.close} onChange={() => setF(o.id, { close: false })} />
+                      <span><strong>Keep it open</strong> (back-order): send it once it's cut. It stays on this list.</span></label>
+                    <label className="flex items-start gap-2"><input type="radio" className="mt-1" checked={F.close} onChange={() => setF(o.id, { close: true })} />
+                      <span><strong>Close the rest</strong>: tell the café it isn't coming.</span></label>
+                    {F.close && <input value={F.note} maxLength={200} onChange={(e) => setF(o.id, { note: e.target.value })} placeholder="Message to the café, e.g. no more ribeye until next week"
+                      className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm" />}
+                  </div>
+                )}
+                <div className="flex gap-2 flex-wrap items-center">
+                  <select value={F.via} onChange={(e) => setF(o.id, { via: e.target.value })} className="px-2 py-1.5 border border-gray-300 rounded bg-white text-sm">
+                    <option value="">Direct (own delivery)</option>
+                    {participants.filter(p => p.role === 'handler' && p.address !== data.me.address).map(p => <option key={p.address} value={p.address}>via {p.name}</option>)}
+                  </select>
+                  <input value={F.notes} maxLength={280} onChange={(e) => setF(o.id, { notes: e.target.value })}
+                    placeholder="Notes (optional), e.g. vac-packed, 1 box" className="flex-1 min-w-[10rem] px-2 py-1.5 border border-gray-300 rounded text-sm" />
+                  <button disabled={busy !== null || !(sending > 0) || bad} onClick={async () => {
+                    const r = await post(`o${o.id}`, `/processor/orders/${o.id}/dispatch`, {
+                      allocations: o.suggestion.allocations.filter(a => qtyOf(a) > 0).map(a => ({ batchId: a.batchId, quantity: qtyOf(a) })),
+                      via: F.via || undefined, notes: F.notes,
+                      ...(sending < left && F.close ? { closeRest: true, shortNote: F.note || undefined } : {}),
+                    }, (d) => d.status === 'part_sent' ? `${formatQty(sending, o.unit)} sent to ${o.restaurantName}; ${formatQty(d.outstanding, o.unit)} kept open`
+                      : d.status === 'closed_short' ? `${formatQty(sending, o.unit)} sent; the rest closed` : `${o.productName} sent to ${o.restaurantName}`);
+                    if (r) { setForm({ ...form, [o.id]: undefined }); setOpenId(null); }
+                  }} className="bg-green-600 text-white text-sm font-semibold px-4 py-1.5 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
+                    {busy === `o${o.id}` ? '⛓️ Sending…' : sending < left ? `🚚 Send ${formatQty(sending, o.unit)} now` : '🚚 Send order'}
+                  </button>
+                  {openId === o.id && <button onClick={() => setOpenId(null)} className="text-sm text-gray-600 hover:underline">Cancel</button>}
+                  {o.quantitySent > 0 && <button onClick={() => closeRest(o)} disabled={busy !== null} className="text-xs text-gray-500 hover:text-red-700 hover:underline ml-auto">Close the rest…</button>}
+                </div>
               </div>
-              <div className="text-xs text-gray-700 bg-white border border-green-100 rounded p-2">
-                <p className="font-semibold">Send from (soonest use-by first):</p>
-                {o.suggestion.allocations.map(a => (
-                  <p key={a.batchId}>{formatQty(a.quantity, o.unit)} from <span className="font-mono">{a.batchId}</span>{a.lotRef ? ` · lot ${a.lotRef}` : ''}{a.useBy ? ` · use by ${ukDate(a.useBy)}` : ''}{a.allergens?.length ? ` · contains ${a.allergens.join(', ')}` : ''}</p>
-                ))}
-              </div>
-              <div className="flex gap-2 flex-wrap items-center">
-                <select value={f(o.id).via} onChange={(e) => setForm({ ...form, [o.id]: { ...f(o.id), via: e.target.value } })} className="px-2 py-1.5 border border-gray-300 rounded bg-white text-sm">
-                  <option value="">Direct (own delivery)</option>
-                  {participants.filter(p => p.role === 'handler' && p.address !== data.me.address).map(p => <option key={p.address} value={p.address}>via {p.name}</option>)}
-                </select>
-                <input value={f(o.id).notes} maxLength={280} onChange={(e) => setForm({ ...form, [o.id]: { ...f(o.id), notes: e.target.value } })}
-                  placeholder="Notes (optional), e.g. vac-packed, 1 box" className="flex-1 min-w-[10rem] px-2 py-1.5 border border-gray-300 rounded text-sm" />
-                <button disabled={busy !== null} onClick={() => post(`o${o.id}`, `/processor/orders/${o.id}/dispatch`, { via: f(o.id).via || undefined, notes: f(o.id).notes },
-                  `${o.productName} sent to ${o.restaurantName}`)}
-                  className="bg-green-600 text-white text-sm font-semibold px-4 py-1.5 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
-                  {busy === `o${o.id}` ? '⛓️ Sending…' : '🚚 Send order'}
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -1066,14 +1110,21 @@ function OrdersToSend({ data, post, busy, participants }) {
           <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">📋 Waiting to be cut ({waiting.length})</p>
           <div className="divide-y divide-gray-100 border border-gray-200 rounded-lg">
             {waiting.map(o => {
-              const have = round3(o.quantity - o.suggestion.shortBy);
+              const left = o.outstanding ?? o.quantity;
+              const have = round3(left - o.suggestion.shortBy);
               return (
-                <div key={o.id} className="px-3 py-2 text-sm flex justify-between gap-2 flex-wrap">
-                  <span><strong>{o.productName}</strong> {formatQty(o.quantity, o.unit)} for {o.restaurantName} <span className="text-gray-500">· {o.farmName}{o.neededUntil ? ` · by ${ukDate(o.neededUntil)}` : ''}</span></span>
-                  <span className="text-xs text-gray-500">
-                    {[have > 0 && `${formatQty(have, o.unit)} ready here`, o.atFarm > 0 && `${formatQty(o.atFarm, o.unit)} at the farm (they can send it)`,
-                      o.toCut > 0 && `${formatQty(o.toCut, o.unit)} still to cut`].filter(Boolean).join(' · ') || (o.preOrder ? 'pre-order: cut it next time' : 'none ready')}
-                  </span>
+                <div key={o.id} className="px-3 py-2 text-sm space-y-1">
+                  <div className="flex justify-between gap-2 flex-wrap">
+                    <span><strong>{o.productName}</strong> {formatQty(left, o.unit)} for {o.restaurantName} <span className="text-gray-500">· {o.farmName}{o.neededUntil ? ` · by ${ukDate(o.neededUntil)}` : ''}{sentLine(o)}</span></span>
+                    <span className="text-xs text-gray-500">
+                      {[have > 0 && `${formatQty(have, o.unit)} ready here`, o.atFarm > 0 && `${formatQty(o.atFarm, o.unit)} at the farm (they can send it)`,
+                        o.toCut > 0 && `${formatQty(o.toCut, o.unit)} still to cut`].filter(Boolean).join(' · ') || (o.preOrder ? 'pre-order: cut it next time' : 'none ready')}
+                    </span>
+                  </div>
+                  <div className="flex gap-3">
+                    {sendable(o) && <button onClick={() => setOpenId(o.id)} className="text-xs text-green-700 font-semibold hover:underline">🚚 Send the {formatQty(have, o.unit)} that's here now…</button>}
+                    {o.quantitySent > 0 && <button onClick={() => closeRest(o)} disabled={busy !== null} className="text-xs text-gray-500 hover:text-red-700 hover:underline">Close the rest…</button>}
+                  </div>
                 </div>
               );
             })}

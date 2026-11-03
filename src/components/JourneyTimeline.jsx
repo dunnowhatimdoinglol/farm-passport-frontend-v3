@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import { ChainHelp } from './ChainProof';
 
 const API_BASE = 'https://farm-passport-backend-v3.onrender.com/api';
 const EXPLORER = 'https://sepolia.basescan.org';
@@ -412,6 +413,7 @@ function JourneyTimeline({ batchId, shipmentId = null, refreshKey = 0 }) {
             )}
           </>
         )}
+        <ChainHelp who="diner" />
       </div>
     </div>
   );
