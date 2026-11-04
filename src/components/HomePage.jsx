@@ -2,6 +2,7 @@
 // Self-contained: its own nav, sections, animations and styles (no extra packages).
 // Animations use IntersectionObserver (works in every browser) and respect "reduce motion".
 import { useState, useEffect, useRef } from 'react';
+import { API_BASE } from './walletHelpers';
 
 const CONTACT_EMAIL = 'farmpassport.hello@gmail.com';
 const ACCENT = '#2F6B3A';
@@ -221,6 +222,73 @@ function Tagline() {
   );
 }
 
+// Counts up from 0 to `target` once `start` is true (eased, like the rest of the page)
+function useCountUp(target, start, ms = 1600) {
+  const [value, setValue] = useState(0);
+  const from = useRef(0);
+  useEffect(() => {
+    if (!start || target === null || target === undefined) return;
+    if (prefersReducedMotion()) { setValue(target); from.current = target; return; }
+    const t0 = performance.now(), a = from.current, b = target;
+    let raf;
+    const step = (t) => {
+      const k = Math.min(1, (t - t0) / ms);
+      setValue(Math.round(a + (b - a) * (1 - Math.pow(1 - k, 3))));
+      if (k < 1) raf = requestAnimationFrame(step); else from.current = b;
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target, start]);
+  return value;
+}
+
+function StatTile({ icon, label, value, start, delay }) {
+  const n = useCountUp(value, start, 1300);
+  return (
+    <div className={`fp-stat fp-card bg-[#F6F6F2] rounded-2xl p-4 ${start ? 'is-in' : ''}`} style={{ transitionDelay: `${delay}ms` }}>
+      <span className="w-9 h-9 rounded-xl bg-[#E3EDE3] flex items-center justify-center text-lg mb-2" aria-hidden="true">{icon}</span>
+      <p className="text-2xl font-extrabold tracking-tight tabular-nums">{n.toLocaleString('en-GB')}</p>
+      <p className="text-sm text-[#5B5B55]">{label}</p>
+    </div>
+  );
+}
+
+// Live numbers, read from the backend. "Deliveries traced" is the blockchain's own delivery counter, so it never resets.
+// Counts up when it scrolls into view, and ticks up if a number changes while the page is open. Hidden until loaded.
+function LiveStats() {
+  const [stats, setStats] = useState(null);
+  const [ref, inView] = useInView(0.3);
+  useEffect(() => {
+    let alive = true;
+    const load = () => fetch(`${API_BASE}/stats`).then(r => r.json()).then(d => { if (alive && d?.success) setStats(d); }).catch(() => {});
+    load();
+    const t = setInterval(load, 60000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  const deliveries = useCountUp(stats?.deliveries ?? null, inView);
+  if (!stats) return <div ref={ref} />;
+
+  return (
+    <div ref={ref} className={`fp-reveal ${inView ? 'is-in' : ''} relative overflow-hidden bg-white border border-black/5 rounded-3xl p-6 sm:p-10 flex flex-wrap gap-8 items-center`}>
+      <div className="fp-stat-glow" aria-hidden="true" />
+      <div className="flex-1 basis-[300px] min-w-0 relative">
+        <p className="inline-flex items-center gap-2 text-sm font-semibold text-[#1F5A2E] bg-[#E3EDE3] px-3 py-1 rounded-full mb-4">
+          <span className="fp-pulse w-2 h-2 rounded-full" style={{ background: ACCENT }} />
+          Live on the blockchain
+        </p>
+        <p className="fp-gradient text-6xl sm:text-7xl font-extrabold tracking-tight leading-none tabular-nums">{deliveries.toLocaleString('en-GB')}</p>
+        <p className="text-lg text-[#4A4A45] mt-3 max-w-sm">deliveries traced from field to plate, every one recorded publicly and never edited.</p>
+      </div>
+      <div className="flex-1 basis-[340px] min-w-0 grid grid-cols-2 gap-3 relative">
+        <StatTile icon="🌾" label="farms" value={stats.farms} start={inView} delay={150} />
+        <StatTile icon="🍽️" label="cafés & restaurants" value={stats.cafes} start={inView} delay={250} />
+        <StatTile icon="🧾" label="meals traced" value={stats.meals} start={inView} delay={350} />
+        <StatTile icon="🏅" label="badges collected" value={stats.badges} start={inView} delay={450} />
+      </div>
+    </div>
+  );
+}
+
 function Audience({ onAction }) {
   const keys = Object.keys(AUDIENCES);
   const [active, setActive] = useState('farms');
@@ -394,6 +462,11 @@ function HomePage({ onNavigate, onLogin, onRegister, signedInAs }) {
           </div>
         </section>
 
+        {/* ── Live numbers ── */}
+        <section className="max-w-6xl mx-auto px-4 sm:px-6 pb-8">
+          <LiveStats />
+        </section>
+
         {/* ── Problem → solution ── */}
         <section className="max-w-6xl mx-auto px-4 sm:px-6 py-16 grid md:grid-cols-2 gap-10 md:gap-16">
           <Reveal>
@@ -562,6 +635,12 @@ const CSS = `
 @keyframes fp-travel{0%{left:0;opacity:1;transform:translateX(-50%)}92%{opacity:1}100%{left:100%;opacity:0;transform:translateX(-50%)}}
 @keyframes fp-ring{0%{box-shadow:0 0 0 0 rgba(47,107,58,.5)}100%{box-shadow:0 0 0 14px rgba(47,107,58,0)}}
 
+/* live numbers */
+.fp-stat{opacity:0;transform:translateY(16px);transition:opacity .8s cubic-bezier(.22,1,.36,1),transform .8s cubic-bezier(.22,1,.36,1),box-shadow .5s}
+.fp-stat.is-in{opacity:1;transform:none}
+.fp-stat-glow{position:absolute;left:-80px;top:-80px;width:320px;height:320px;border-radius:9999px;pointer-events:none;
+  background:radial-gradient(circle,rgba(47,107,58,.12),rgba(214,180,96,.08) 45%,transparent 70%);animation:fp-drift 14s ease-in-out infinite alternate}
+
 /* audience tab switch */
 .fp-swap{animation:fp-in .55s cubic-bezier(.22,1,.36,1)}
 .fp-swap-item{opacity:0;animation:fp-in .55s cubic-bezier(.22,1,.36,1) forwards}
@@ -576,7 +655,8 @@ const CSS = `
 @media (prefers-reduced-motion: reduce){
   .fp-in,.fp-swap,.fp-swap-item{animation:none;opacity:1}
   .fp-reveal{opacity:1;transform:none;transition:none}
-  .fp-blob,.fp-float,.fp-pulse,.fp-band::after{animation:none}
+  .fp-blob,.fp-float,.fp-pulse,.fp-band::after,.fp-stat-glow{animation:none}
+  .fp-stat{opacity:1;transform:none;transition:none}
   .fp-flow .fp-stop{opacity:1;transform:none}
   .fp-flow .fp-flow-fill{width:100%}
   .fp-btn,.fp-card,.fp-word{transition:none}

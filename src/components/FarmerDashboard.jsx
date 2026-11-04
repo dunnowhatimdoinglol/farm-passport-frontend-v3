@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import CreateBatchForm from './CreateBatchForm';
 import { QRCodeSVG } from 'qrcode.react';
-import { FarmerOrders, DispatchForm, FarmerShipments, FarmerReturns, FarmerMeatList } from './FarmerSupply';
+import { FarmerOrders, DispatchForm, FarmerShipments, FarmerComingIn, FarmerHeldStock, WriteOffLog, FarmerMeatList } from './FarmerSupply';
 import { formatQty, batchLink, API_BASE } from './walletHelpers';
 import NfcShare from './NfcShare';
 import { ChainHelp } from './ChainProof';
@@ -37,8 +37,13 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
   const [recallBusy, setRecallBusy] = useState(null);
 
   // v4.2 — one section at a time: a "Today" to-do page, then tabs. The open tab is remembered for this browser tab.
-  const [tab, setTabState] = useState(() => { try { return sessionStorage.getItem('fp_farm_tab') || 'today'; } catch { return 'today'; } });
-  const setTab = (t) => {
+  const [tab, setTabState] = useState(() => {
+    try { const t = sessionStorage.getItem('fp_farm_tab') || 'today'; return t === 'batches' ? 'stock' : t; } catch { return 'today'; }
+  });
+  // Stock tab filter (v4.3): all · produce · animals · boxed meat
+  const [stockFilter, setStockFilter] = useState('all');
+  const setTab = (t, filter) => {
+    if (filter) setStockFilter(filter);
     setTabState(t);
     try { sessionStorage.setItem('fp_farm_tab', t); } catch { /* private window */ }
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -196,6 +201,9 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
   const { farmer, batches } = farmerData;
   const approved = farmer.approvalStatus === 'approved';
   const refreshAll = () => setRefreshTrigger(prev => prev + 1);
+  // Stock tab filter: produce = everything that isn't livestock; animals = livestock
+  const shownBatches = batches.filter(b => stockFilter === 'all'
+    || (stockFilter === 'animals' ? b.productType === 'Livestock' : stockFilter === 'produce' ? b.productType !== 'Livestock' : false));
 
   // Recall a batch (food safety): no more dispatches or sales; cafés holding it are warned
   const recallBatch = async (batchId, productName) => {
@@ -341,7 +349,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
 
       {(tab === 'today' || (tab === 'meat' && !approved)) && (
         <TodayPanel todo={todo} batches={batches} approved={approved} farmName={farmer.farmName} go={setTab}
-          onCreate={() => { setTab('batches'); setShowCreateBatch(true); }} />
+          onCreate={() => { setTab('stock', 'all'); setShowCreateBatch(true); }} />
       )}
 
       {tab === 'farm' && (<>
@@ -468,20 +476,51 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
       {/* Orders from restaurants */}
       {tab === 'orders' && <FarmerOrders farmerToken={farmerToken} approved={approved} refreshKey={refreshTrigger} onChanged={refreshAll} />}
 
-      {/* Meat list (what cafés can order) + cutting list (what they've pre-ordered) */}
+      {/* Meat prices (what cafés can order) + cutting list (what they've pre-ordered) */}
       {tab === 'meat' && approved && <FarmerMeatList farmerToken={farmerToken} refreshKey={refreshTrigger} />}
 
       {tab === 'deliveries' && (<>
-        {/* Coming in to the farm: returns, boxed meat back from the abattoir */}
-        <FarmerReturns farmerToken={farmerToken} refreshKey={refreshTrigger} onChanged={refreshAll} />
-        {/* Shipments sent (refused goods to check in are at the top) */}
+        {/* Coming in to the farm: boxed meat from the abattoir, returns, refused goods coming back — confirm, then they leave the list */}
+        <FarmerComingIn farmerToken={farmerToken} refreshKey={refreshTrigger} onChanged={refreshAll} />
+        {/* Shipments sent */}
         <FarmerShipments farmerToken={farmerToken} refreshKey={refreshTrigger} onChanged={refreshAll} />
-        {todo && !todo.shipments.length && !todo.inbound.length && (
-          <div className="bg-white rounded-lg shadow-lg p-6 text-sm text-gray-500">No deliveries yet. Send a batch from the <button onClick={() => setTab('batches')} className="text-green-700 font-semibold hover:underline">Batches</button> tab, or dispatch an order.</div>
+        {todo && !todo.shipments.length && (
+          <div className="bg-white rounded-lg shadow-lg p-6 text-sm text-gray-500">Nothing sent yet. Send a batch from the <button onClick={() => setTab('stock')} className="text-green-700 font-semibold hover:underline">Stock</button> tab, or dispatch an order.</div>
         )}
       </>)}
 
-      {tab === 'batches' && (<>
+      {tab === 'stock' && (() => {
+        // v4.3: one Stock tab with filters — your batches (produce, animals) and boxed meat / returns held from deliveries
+        const held = (todo?.inbound || []).filter(x => x.status === 'delivered' && x.available > 0);
+        const counts = {
+          all: batches.length + held.length,
+          produce: batches.filter(b => b.productType !== 'Livestock').length + held.filter(x => x.productType !== 'Meat').length,
+          animals: batches.filter(b => b.productType === 'Livestock').length,
+          meat: held.filter(x => x.productType === 'Meat').length,
+        };
+        return (
+          <div className="flex gap-2 mb-4 flex-wrap">
+            {[['all', 'All'], ['produce', '🥕 Produce'], ['animals', '🐄 Animals'], ['meat', '🥩 Boxed meat']].map(([k, label]) => (
+              <button key={k} onClick={() => setStockFilter(k)}
+                className={`px-3 py-1.5 rounded-full text-sm font-semibold border transition ${stockFilter === k ? 'bg-gray-800 text-white border-gray-800' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}>
+                {label} <span className={stockFilter === k ? 'text-gray-300' : 'text-gray-400'}>{counts[k]}</span>
+              </button>
+            ))}
+          </div>
+        );
+      })()}
+
+      {tab === 'stock' && stockFilter === 'meat' && (<>
+        <FarmerHeldStock farmerToken={farmerToken} refreshKey={refreshTrigger} onChanged={refreshAll} filter="meat" />
+        {!(todo?.inbound || []).some(x => x.status === 'delivered' && x.available > 0 && x.productType === 'Meat') && (
+          <div className="bg-white rounded-lg shadow-lg p-6 mb-6 text-sm text-gray-500">
+            No boxed meat at the farm. When the abattoir sends cuts back to you (private kill), confirm them under <button onClick={() => setTab('deliveries')} className="text-green-700 font-semibold hover:underline">Deliveries → Coming in</button> and they'll show here.
+          </div>
+        )}
+        <WriteOffLog farmerToken={farmerToken} refreshKey={refreshTrigger} />
+      </>)}
+
+      {tab === 'stock' && stockFilter !== 'meat' && (<>
       {/* Create Batch Button / Form */}
       {!showCreateBatch ? (
         <button
@@ -505,15 +544,15 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
       )}
 
       {/* Batches List */}
-      <div className="bg-white rounded-lg shadow-lg p-6">
+      <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
         <h3 className="text-xl font-bold text-gray-800 mb-4">
-          Your Batches ({batches.length})
+          {stockFilter === 'animals' ? 'Your animals' : stockFilter === 'produce' ? 'Your produce' : 'Your batches'} ({shownBatches.length})
         </h3>
 
         {/* Send several animals to an abattoir in one load */}
         {(() => {
           const sendable = batches.filter(b => b.productType === 'Livestock' && !b.recalled && Number(b.quantityRemaining ?? b.quantity) > 0);
-          if (!approved || sendable.length < 2) return null;
+          if (!approved || sendable.length < 2 || stockFilter === 'produce') return null;
           const picked = sendable.filter(b => pickedAnimals[b.batchId]);
           return (
             <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-3">
@@ -543,7 +582,9 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
           );
         })()}
 
-        {batches.length === 0 ? (
+        {shownBatches.length === 0 && batches.length > 0 ? (
+          <p className="text-sm text-gray-500">{stockFilter === 'animals' ? 'No animals registered. Create a batch → Livestock to add some.' : 'No produce batches yet.'}</p>
+        ) : batches.length === 0 ? (
           <div className="text-center py-12">
             <div className="text-6xl mb-4">📦</div>
             <h4 className="text-xl font-semibold text-gray-700 mb-2">
@@ -561,7 +602,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
           </div>
         ) : (
           <div className="space-y-4">
-            {batches.map((batch, index) => {
+            {shownBatches.map((batch, index) => {
               const batchId = String(batch.batchId || 'Unknown');
               const productType = String(batch.productType || 'Unknown');
               const productName = String(batch.productName || 'Unknown');
@@ -802,6 +843,9 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
           </div>
         )}
       </div>
+      {/* Returned produce held from deliveries (boxed meat too, under "All") */}
+      <FarmerHeldStock farmerToken={farmerToken} refreshKey={refreshTrigger} onChanged={refreshAll} filter={stockFilter === 'produce' ? 'produce' : stockFilter === 'animals' ? 'none' : 'all'} />
+      <WriteOffLog farmerToken={farmerToken} refreshKey={refreshTrigger} />
       </>)}
     </div>
   );
@@ -812,8 +856,8 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
 // ─────────────────────────────────────────────
 
 const TABS = [
-  ['today', '🏠', 'Today'], ['batches', '📦', 'Batches'], ['orders', '🧾', 'Orders'],
-  ['deliveries', '🚚', 'Deliveries'], ['meat', '🥩', 'Meat list'], ['farm', '🏡', 'Farm profile'],
+  ['today', '🏠', 'Today'], ['stock', '📦', 'Stock'], ['orders', '🧾', 'Orders'],
+  ['deliveries', '🚚', 'Deliveries'], ['meat', '🏷️', 'Meat prices'], ['farm', '🏡', 'Farm profile'],
 ];
 
 /** Things waiting for the farm, worked out from its orders and deliveries */
@@ -886,7 +930,7 @@ function TodayPanel({ todo, batches, approved, farmName, go, onCreate }) {
     n.comingIn.length && { tone: 'todo', icon: '📥', tab: 'deliveries', action: 'Confirm',
       title: `${n.comingIn.length} ${plural(n.comingIn.length, 'delivery', 'deliveries')} coming in to you`,
       sub: n.comingIn.map(s => `${formatQty(s.quantitySent, s.unit)} ${s.productName} from ${s.fromName}`).join(' · ') },
-    nearUseBy.length && { tone: 'todo', icon: '⏰', tab: 'batches', action: 'See batches',
+    nearUseBy.length && { tone: 'todo', icon: '⏰', tab: 'stock', action: 'See stock',
       title: `${nearUseBy.length} ${plural(nearUseBy.length, 'batch is', 'batches are')} close to the use-by date`,
       sub: `${nearUseBy.slice(0, 3).map(b => b.productName).join(', ')}. Make it a deal so cafés snap it up?` },
     n.unpaid.length && { tone: 'info', icon: '💷', tab: 'orders', action: 'See orders',
@@ -917,7 +961,7 @@ function TodayPanel({ todo, batches, approved, farmName, go, onCreate }) {
           <button onClick={onCreate} disabled={!approved}
             className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">➕ New batch</button>
           {animals.length > 0 && approved && (
-            <button onClick={() => go('batches')} className="bg-red-700 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-red-800">
+            <button onClick={() => go('stock', 'animals')} className="bg-red-700 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-red-800">
               🐄 Send animals to an abattoir</button>
           )}
           <button onClick={() => go('orders')} className="border border-gray-300 text-gray-700 text-sm font-semibold px-4 py-2 rounded-lg hover:bg-gray-50">🧾 All orders</button>
@@ -945,12 +989,12 @@ function TodayPanel({ todo, batches, approved, farmName, go, onCreate }) {
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          ['📦', 'Batches with stock', batches.filter(live).length, 'batches'],
-          ['🐄', 'Animals on the farm', animals.reduce((x, b) => x + Number(b.quantityRemaining ?? b.quantity), 0), 'batches'],
+          ['📦', 'Batches with stock', batches.filter(live).length, 'stock'],
+          ['🐄', 'Animals on the farm', animals.reduce((x, b) => x + Number(b.quantityRemaining ?? b.quantity), 0), 'stock', 'animals'],
           ['🧾', 'Open orders', n ? n.newOrders.length + n.partSent.length + n.meatElsewhere.length : '…', 'orders'],
           ['🎖️', 'Badges unlocked', batches.reduce((x, b) => x + (b.unlocks || 0), 0), 'farm'],
-        ].map(([icon, label, value, t]) => (
-          <button key={label} onClick={() => go(t)} className="bg-white rounded-lg shadow p-4 text-left hover:shadow-md transition">
+        ].map(([icon, label, value, t, f]) => (
+          <button key={label} onClick={() => go(t, f)} className="bg-white rounded-lg shadow p-4 text-left hover:shadow-md transition">
             <p className="text-xs text-gray-500">{icon} {label}</p>
             <p className="text-2xl font-bold text-gray-800">{value}</p>
           </button>

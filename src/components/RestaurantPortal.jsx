@@ -7,7 +7,7 @@ import { AUTH_EVENT, announceAuth, clearCustomerSession } from '../authSession';
 import { shortWhen, receiptLink } from './walletHelpers';
 import NfcShare from './NfcShare';
 import { PhotoPicker, DeliveryPhotoButton } from './DeliveryPhoto';
-import { TermsCheck } from './FarmerSupply';
+import { TermsCheck, Refs, OwedLine } from './FarmerSupply';
 import { TxLink, ChainHelp } from './ChainProof';
 
 // Prices are only shown to the farm and the restaurant — never on the customer journey
@@ -631,6 +631,7 @@ function OrderStock({ authHeader, approved }) {
   const [quantity, setQuantity] = useState('');
   const [until,    setUntil]    = useState('');
   const [note,     setNote]     = useState('');
+  const [po,       setPo]       = useState('');       // the café's own PO number (v4.3)
   const [busy,     setBusy]     = useState(false);
   const [error,    setError]    = useState(null);
   const [message,  setMessage]  = useState(null);
@@ -657,22 +658,34 @@ function OrderStock({ authHeader, approved }) {
   const price = deal ? deal.dealPrice : product?.pricePerUnit;
   const day = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 
+  // What can be ordered, and why not more (stock held for other cafés' open orders)
+  const heldNote = product?.reserved > 0 ? ` · ${formatQty(product.reserved, unit)} held for other orders` : '';
+  const tooMuch = Number(quantity) > 0 && max !== undefined && Number(quantity) > max;
+
   const submit = async (e) => {
     e.preventDefault();
+    if (tooMuch) { setError(`Only ${formatQty(max, unit)} available${heldNote ? ` (${heldNote.slice(3)})` : ''}`); return; }
     setBusy(true); setError(null); setMessage(null);
     try {
       const body = deal
-        ? { dealBatchId: deal.batchId, quantity, note }
-        : { farmerAddress: product.farmerAddress, productName: product.productName, unit: product.unit, quantity, neededUntil: until || undefined, note };
+        ? { dealBatchId: deal.batchId, quantity, note, poNumber: po || undefined }
+        : { farmerAddress: product.farmerAddress, productName: product.productName, unit: product.unit, quantity, neededUntil: until || undefined, note, poNumber: po || undefined };
       await axios.post(`${API_BASE}/restaurant/orders`, body, authHeader);
       setMessage(`Order sent to ${(deal || product)?.farmName || 'the farm'}. You'll see it in Deliveries once they dispatch it.`);
-      setPick(''); setQuantity(''); setNote(''); setUntil('');
+      setPick(''); setQuantity(''); setNote(''); setUntil(''); setPo('');
       load();
     } catch (err) {
       setError(err.response?.data?.error || 'Could not place the order');
     } finally {
       setBusy(false);
     }
+  };
+
+  const editPo = async (o) => {
+    const v = window.prompt(`Your PO number for ${o.orderRef || 'this order'}:`, o.poNumber || '');
+    if (v === null) return;
+    try { await axios.put(`${API_BASE}/restaurant/orders/${o.id}/ref`, { poNumber: v.trim() }, authHeader); load(); }
+    catch (err) { setError(err.response?.data?.error || 'Could not save the PO number'); }
   };
 
   const cancelOrder = async (o) => {
@@ -756,11 +769,16 @@ function OrderStock({ authHeader, approved }) {
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-2">Quantity</label>
               <div className="relative">
-                <input type="number" step="any" min="0.001" max={max}
+                <input type="number" step="any" min="0.001"
                   value={quantity} onChange={(e) => setQuantity(e.target.value)} required placeholder="e.g. 10"
-                  className="w-full pl-4 pr-16 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent" />
+                  className={`w-full pl-4 pr-16 py-3 border rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent ${tooMuch ? 'border-red-500' : 'border-gray-300'}`} />
                 {unit && <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">{unit}</span>}
               </div>
+              {max !== undefined && (
+                <p className={`text-xs mt-1 ${tooMuch ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
+                  {tooMuch ? `Only ${formatQty(max, unit)} available` : `${formatQty(max, unit)} available`}{heldNote}
+                </p>
+              )}
             </div>
             {!deal && (
               <div>
@@ -783,11 +801,18 @@ function OrderStock({ authHeader, approved }) {
               )}
             </p>
           )}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Note to the farm <span className="font-normal text-gray-400">(optional)</span></label>
-            <input type="text" value={note} onChange={(e) => setNote(e.target.value)} maxLength={280}
-              placeholder="e.g. Delivery Tuesday morning please"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent" />
+          <div className="grid sm:grid-cols-3 gap-4">
+            <div className="sm:col-span-2">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Note to the farm <span className="font-normal text-gray-400">(optional)</span></label>
+              <input type="text" value={note} onChange={(e) => setNote(e.target.value)} maxLength={280}
+                placeholder="e.g. Delivery Tuesday morning please"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent" />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Your PO number <span className="font-normal text-gray-400">(optional)</span></label>
+              <input type="text" value={po} onChange={(e) => setPo(e.target.value)} maxLength={40} placeholder="e.g. PO-4521"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent" />
+            </div>
           </div>
           {error && <p className="text-sm text-red-600 font-semibold">⚠️ {error}</p>}
           {message && <p className="text-sm text-green-700 font-semibold">✅ {message}</p>}
@@ -809,6 +834,7 @@ function OrderStock({ authHeader, approved }) {
                 <div className="flex-1 min-w-0">
                   <p className="font-semibold text-gray-800">{o.isMeat ? '🥩 ' : ''}{formatQty(o.status === 'part_sent' ? o.quantity : (o.quantitySent ?? o.quantity), o.unit)} {o.productName} — {o.farmName}{o.isDeal ? ' 🏷️' : ''}
                     {o.frozen && <span className="ml-1 text-xs font-semibold bg-sky-100 text-sky-800 px-1.5 py-0.5 rounded">❄️ frozen</span>}</p>
+                  <p className="text-xs"><Refs x={o} /> {!['declined', 'cancelled'].includes(o.status) && <button onClick={() => editPo(o)} className="text-blue-600 hover:underline ml-1">{o.poNumber ? 'change PO' : '+ add your PO number'}</button>}</p>
                   {o.isMeat && o.status === 'requested' && <p className="text-xs text-gray-600">{o.preOrder ? '📋 Pre-order: sent once your cuts are ready' : '🔪 Ready: the farm or its abattoir sends it to you'}</p>}
                   {o.isMeat && o.sentByName && o.sentBy !== o.farmerAddress && <p className="text-xs text-gray-600">🔪 Sent by {o.sentByName}</p>}
                   {o.status === 'part_sent' && <p className="text-xs text-amber-800 font-semibold">{formatQty(o.quantitySent, o.unit)} of {formatQty(o.quantity, o.unit)} sent so far · {formatQty(o.outstanding, o.unit)} still to come</p>}
@@ -833,6 +859,10 @@ function OrderStock({ authHeader, approved }) {
                       {' '}= <strong>{gbp(o.total)}</strong>{o.totalIsEstimate ? ' (estimate)' : ''}
                     </p>
                   )}
+                  <OwedLine o={o} />
+                  {(o.dispatches || []).filter(d => d.missing > 0).map(d => (
+                    <p key={d.shipmentId} className="text-xs text-amber-800">⚠️ {formatQty(d.missing, o.unit)} didn't arrive (delivery #{d.shipmentId}): {d.missingResolution === 'waived' ? 'not charged' : d.missingResolution === 'charged' ? 'charged, as agreed with the farm' : 'the farm will decide with you whether it’s charged'}</p>
+                  ))}
                   <TermsCheck order={o} token={(authHeader?.headers?.Authorization || '').replace('Bearer ', '')} />
                 </div>
                 <div className="text-right space-y-1 shrink-0">
@@ -874,6 +904,7 @@ function MeatOrder({ authHeader, approved, onOrdered }) {
   const [species, setSpecies] = useState(null);
   const [qty,     setQty]     = useState({});       // `${farm}|${species}|${cut}` → kg typed
   const [frozen,  setFrozen]  = useState({});       // same key → wanted frozen
+  const [po,      setPo]      = useState('');       // the café's PO number for this order
   const [until,   setUntil]   = useState('');
   const [note,    setNote]    = useState('');
   const [busy,    setBusy]    = useState(false);
@@ -908,12 +939,12 @@ function MeatOrder({ authHeader, approved, onOrdered }) {
       for (const x of basket) {
         await axios.post(`${API_BASE}/restaurant/orders`, {
           meat: true, farmerAddress: x.f.farmerAddress, species: x.s.species, productName: x.c.productName, quantity: x.q,
-          neededUntil: until || undefined, note: note.trim() || undefined, frozen: !!frozen[x.k] || undefined
+          neededUntil: until || undefined, note: note.trim() || undefined, frozen: !!frozen[x.k] || undefined, poNumber: po.trim() || undefined
         }, authHeader);
         ok.push(x);
       }
       setMessage(`${ok.length} order${ok.length === 1 ? '' : 's'} placed. ${ok.some(x => status(x.c, x.q) === 'pre') ? 'Pre-orders are sent once the cuts are ready.' : 'The abattoir will send them.'}`);
-      setQty({}); setFrozen({}); setNote(''); setUntil('');
+      setQty({}); setFrozen({}); setNote(''); setUntil(''); setPo('');
     } catch (err) {
       setError(`${ok.length ? `${ok.length} placed, then ` : ''}${basket[ok.length]?.c.productName}: ${err.response?.data?.error || 'could not order'}`);
       setQty(Object.fromEntries(basket.slice(ok.length).map(x => [x.k, String(x.q)])));
@@ -1026,6 +1057,9 @@ function MeatOrder({ authHeader, approved, onOrdered }) {
                 </label>
                 <label className="text-xs font-semibold text-gray-700">Note <span className="font-normal text-gray-400">(optional)</span>
                   <input value={note} maxLength={280} onChange={(e) => setNote(e.target.value)} placeholder="e.g. steaks cut 2 cm thick" className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg font-normal" />
+                </label>
+                <label className="text-xs font-semibold text-gray-700">Your PO number <span className="font-normal text-gray-400">(optional)</span>
+                  <input value={po} maxLength={40} onChange={(e) => setPo(e.target.value)} placeholder="e.g. PO-4521" className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg font-normal" />
                 </label>
               </div>
               {basket.some(x => frozen[x.k]) && <p className="text-xs text-sky-800 mb-2">❄️ Frozen items come with the date they were frozen. Keep them at −18°C or colder; once defrosted, use within 24 hours and don't refreeze.</p>}
@@ -1196,7 +1230,8 @@ function Deliveries({ authHeader, approved, onReceived }) {
   const [shipments, setShipments] = useState([]);
   const [loading,   setLoading]   = useState(true);
   const [qty,       setQty]       = useState({});   // shipmentId → quantity received
-  const [refused,   setRefused]   = useState({});   // shipmentId → quantity turned away at the door
+  const [refused,   setRefused]   = useState({});   // shipmentId → quantity turned away at the door (typed by hand)
+  const [goodsIn,   setGoodsIn]   = useState({});   // shipmentId → the café's own goods-in reference (v4.3)
   const [agree,     setAgree]     = useState({});   // shipmentId → agree to the farm's terms (default yes)
   const [notes,     setNotes]     = useState({});
   const [photos,    setPhotos]    = useState({});   // shipmentId → { file, preview } (proof of delivery)
@@ -1233,7 +1268,8 @@ function Deliveries({ authHeader, approved, onReceived }) {
     try {
       const form = new FormData();
       form.append('quantityReceived', String(acceptedOf(s)));
-      form.append('quantityRejected', String(refused[s.shipmentId] || 0));
+      form.append('quantityRejected', String(refusedOf(s)));
+      if (goodsIn[s.shipmentId]) form.append('receiverRef', goodsIn[s.shipmentId]);
       form.append('acceptTerms', agree[s.shipmentId] === false ? 'false' : 'true');
       form.append('notes', notes[s.shipmentId] || '');
       if (photo) form.append('photo', photo.file, 'delivery.jpg');
@@ -1248,8 +1284,20 @@ function Deliveries({ authHeader, approved, onReceived }) {
     }
   };
 
-  // Accepted defaults to "everything sent, minus anything refused" until typed over
-  const acceptedOf = (s) => qty[s.shipmentId] ?? Math.max(0, Math.round((s.quantitySent - (Number(refused[s.shipmentId]) || 0)) * 1000) / 1000);
+  // v4.3: type what you accept and "Refused" fills in with the rest (you can still change it, e.g. if some went missing).
+  // Type the refused amount first instead and "Accepted" fills in.
+  const r3 = (n) => Math.round(n * 1000) / 1000;
+  const typedRefused = (s) => refused[s.shipmentId] !== undefined && refused[s.shipmentId] !== null;
+  const acceptedOf = (s) => qty[s.shipmentId] ?? Math.max(0, r3(s.quantitySent - (Number(refused[s.shipmentId]) || 0)));
+  const refusedOf = (s) => (typedRefused(s) ? (Number(refused[s.shipmentId]) || 0)
+    : qty[s.shipmentId] !== undefined ? Math.max(0, r3(s.quantitySent - (Number(qty[s.shipmentId]) || 0))) : 0);
+  const missingOf = (s) => Math.max(0, r3(s.quantitySent - (Number(acceptedOf(s)) || 0) - refusedOf(s)));
+  // What the café will pay: only what it accepts (plus delivery, unless it refuses the lot)
+  const payOf = (s) => {
+    if (!s.terms || s.terms.unitPrice === null || s.terms.unitPrice === undefined) return null;
+    const a = Number(acceptedOf(s)) || 0;
+    return Math.round((a * s.terms.unitPrice + (a > 0 ? Number(s.terms.deliveryFee || 0) : 0)) * 100) / 100;
+  };
 
   // Send stock back, or write it off
   const doAction = async () => {
@@ -1295,6 +1343,7 @@ function Deliveries({ authHeader, approved, onReceived }) {
                   </div>
                 </div>
                 <PartOrderLine s={s} />
+                <Refs x={s} className="mt-1" />
                 <p className="text-sm text-gray-600">from {s.fromName}{s.carrierName ? ` via ${s.carrierName}` : ''} · delivery #{s.shipmentId} <TxLink hash={s.sentTxHash} label="Sent" className="ml-1" /></p>
                 {s.dispatchNotes && <p className="text-sm text-gray-600 italic">{s.fromName}: "{s.dispatchNotes}"</p>}
                 {s.handlingSteps?.length > 0 && (
@@ -1331,30 +1380,46 @@ function Deliveries({ authHeader, approved, onReceived }) {
                 <div className="flex gap-2 mt-2 flex-wrap items-center">
                   <span className="text-sm text-gray-600 w-20">Refused:</span>
                   <input type="number" step="any" min="0" max={s.quantitySent} placeholder="0"
-                    value={refused[s.shipmentId] || ''}
-                    onChange={(e) => setRefused({ ...refused, [s.shipmentId]: e.target.value })}
+                    value={typedRefused(s) ? refused[s.shipmentId] : (refusedOf(s) || '')}
+                    onChange={(e) => setRefused({ ...refused, [s.shipmentId]: e.target.value === '' ? null : e.target.value })}
                     className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
                   <span className="text-xs text-gray-500">{s.unit} turned away at the door (goes back with the driver; {s.fromName} checks it in)</span>
                 </div>
+                {missingOf(s) > 0 && (
+                  <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2">
+                    ⚠️ That leaves <strong>{formatQty(missingOf(s), s.unit)}</strong> not accepted or refused: it'll be recorded as <strong>missing</strong> (didn't arrive). You won't be charged for it unless you agree it with {s.fromName}.
+                  </p>
+                )}
+                {payOf(s) !== null && (
+                  <p className="text-sm mt-2 text-gray-800">
+                    💷 You'll pay <strong>{gbp(payOf(s))}</strong>
+                    <span className="text-gray-500"> for {formatQty(Number(acceptedOf(s)) || 0, s.unit)}{Number(acceptedOf(s)) > 0 && s.terms.deliveryFee ? ` + ${gbp(s.terms.deliveryFee)} delivery` : ''}
+                      {refusedOf(s) > 0 ? ` · ${formatQty(refusedOf(s), s.unit)} refused isn't charged` : ''}{Number(acceptedOf(s)) === 0 && s.terms.deliveryFee ? ' · no delivery charge when you refuse it all' : ''}</span>
+                  </p>
+                )}
                 {s.terms && (
                   <label className="flex gap-2 items-start mt-3 bg-white border border-gray-200 rounded-lg p-2 text-sm cursor-pointer">
                     <input type="checkbox" className="mt-1"
                       checked={agree[s.shipmentId] !== false}
                       onChange={(e) => setAgree({ ...agree, [s.shipmentId]: e.target.checked })} />
                     <span>
-                      I agree the order terms
-                      {s.terms.total != null && (
-                        <> — {s.terms.unitPrice != null && <>{gbp(s.terms.unitPrice)}/{s.unit}</>}
-                        {s.terms.deliveryFee ? <> + {gbp(s.terms.deliveryFee)} delivery</> : null} = <strong>{gbp(s.terms.total)}</strong></>
-                      )}
-                      <span className="block text-xs text-gray-500">Your agreement is fingerprinted on the blockchain. Untick if the price isn't what you agreed — the farm will see it wasn't confirmed.</span>
+                      I agree the price
+                      {s.terms.unitPrice != null ? <> — <strong>{gbp(s.terms.unitPrice)}/{s.unit}</strong>{s.terms.deliveryFee ? <> + {gbp(s.terms.deliveryFee)} delivery</> : null}</>
+                        : s.terms.total != null ? <> — {gbp(s.terms.total)}</> : null}
+                      <span className="block text-xs text-gray-500">You only pay for what you accept. Your agreement is fingerprinted on the blockchain. Untick if the price isn't what you agreed: the farm will see it wasn't confirmed.</span>
                     </span>
                   </label>
                 )}
-                <input type="text" maxLength={200} placeholder="Notes (optional), e.g. 2 crates damaged"
-                  value={notes[s.shipmentId] || ''}
-                  onChange={(e) => setNotes({ ...notes, [s.shipmentId]: e.target.value })}
-                  className="w-full mt-2 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+                <div className="flex gap-2 mt-2 flex-wrap">
+                  <input type="text" maxLength={200} placeholder="Notes (optional), e.g. 2 crates damaged"
+                    value={notes[s.shipmentId] || ''}
+                    onChange={(e) => setNotes({ ...notes, [s.shipmentId]: e.target.value })}
+                    className="flex-1 min-w-[12rem] px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+                  <input type="text" maxLength={40} placeholder="Goods-in ref (optional)"
+                    value={goodsIn[s.shipmentId] || ''}
+                    onChange={(e) => setGoodsIn({ ...goodsIn, [s.shipmentId]: e.target.value })}
+                    className="w-48 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+                </div>
                 <PhotoPicker
                   photo={photos[s.shipmentId]}
                   onChange={(p) => setPhotos({ ...photos, [s.shipmentId]: p })}
@@ -1383,6 +1448,7 @@ function Deliveries({ authHeader, approved, onReceived }) {
                     {s.frozenOn && <span className="ml-1 text-xs font-semibold bg-sky-100 text-sky-800 px-1.5 py-0.5 rounded">❄️ frozen {new Date(s.frozenOn).toLocaleDateString('en-GB')}</span>}
                     {s.order?.partOrder && <span className="ml-1 text-xs font-semibold bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded">Part order</span>}</p>
                   <PartOrderLine s={s} />
+                  <Refs x={s} />
                   <p className="text-xs text-gray-500">
                     #{s.shipmentId} · received {formatQty(s.quantityReceived, s.unit)} of {formatQty(s.quantitySent, s.unit)} <TxLink hash={s.receivedTxHash} label="Received" className="ml-1" />
                     {s.quantityRejected > 0 && <> · ↩️ {formatQty(s.quantityRejected, s.unit)} refused</>}

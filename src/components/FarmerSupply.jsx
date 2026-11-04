@@ -10,6 +10,39 @@ export const gbp = (v) => (v === null || v === undefined || v === '' || isNaN(Nu
   ? null : `£${Number(v).toFixed(2)}`;
 const toNum = (v) => (v === '' || v === null || v === undefined || isNaN(Number(v))) ? null : Number(v);
 
+// v4.3 — references: the order number (HF-0001), the café's PO, the sender's and receiver's own numbers
+export function Refs({ x, className = '' }) {
+  const list = [
+    x.orderRef && ['Order', x.orderRef], x.poNumber && ['PO', x.poNumber],
+    x.senderRef && ['Sender ref', x.senderRef], x.receiverRef && ['Goods-in ref', x.receiverRef],
+  ].filter(Boolean);
+  if (!list.length) return null;
+  return (
+    <span className={`inline-flex flex-wrap gap-1 align-middle ${className}`}>
+      {list.map(([k, v]) => <span key={k} className="text-[11px] font-mono bg-gray-100 text-gray-700 border border-gray-200 rounded px-1.5 py-0.5"><span className="font-sans text-gray-500">{k}</span> {v}</span>)}
+    </span>
+  );
+}
+export function RefInput({ value, onChange, placeholder = 'Your ref (optional), e.g. invoice or delivery note no.', disabled, className = '' }) {
+  return (
+    <input type="text" value={value || ''} maxLength={40} onChange={(e) => onChange(e.target.value)} disabled={disabled} placeholder={placeholder}
+      className={`px-3 py-2 border border-gray-300 rounded-lg text-sm ${className}`} />
+  );
+}
+// "£17.00 owed (2 kg refused, not charged)" — the café only pays for what it accepted
+export function OwedLine({ o }) {
+  if (o.owed === null || o.owed === undefined || o.total === null || o.total === undefined) return null;
+  const changed = Math.round(o.owed * 100) !== Math.round(o.total * 100);
+  if (!changed && !o.disputed) return null;
+  return (
+    <p className="text-xs mt-0.5">
+      <span className="font-semibold text-gray-800">💷 Owed {gbp(o.owed)}</span>{o.owedFinal ? '' : ' so far'}
+      <span className="text-gray-500"> instead of {gbp(o.total)}{o.refusedTotal > 0 ? ` · ${formatQty(o.refusedTotal, o.unit)} refused, not charged` : ''}
+        {o.missingTotal > 0 ? ` · ${formatQty(o.missingTotal, o.unit)} didn't arrive${o.disputed ? ' (to decide)' : ''}` : ''}</span>
+    </p>
+  );
+}
+
 const STATUS_BADGE = {
   requested:  'bg-yellow-100 text-yellow-800',
   part_sent:  'bg-amber-200 text-amber-900',
@@ -139,7 +172,7 @@ export function RestChoice({ left, sending, unit, value, onChange }) {
   );
 }
 // How each delivery of an order went: what the café accepted and refused, its note and delivery photo
-export function DeliveryResults({ o, token }) {
+export function DeliveryResults({ o, token, onResolve, busy }) {
   const ds = (o.dispatches || []).filter(d => d.status && d.status !== 'cancelled');
   if (!ds.length) return null;
   return (
@@ -151,14 +184,27 @@ export function DeliveryResults({ o, token }) {
             {d.status === 'delivered'
               ? <>✅ <strong>{o.restaurantName}</strong> received {formatQty(d.received ?? d.quantity, o.unit)}
                   {d.refused > 0 && <span className="text-orange-700 font-semibold"> · ↩️ {formatQty(d.refused, o.unit)} refused
-                    {d.awaitingReturn > 0 ? ' (coming back: check it in under Shipments sent)'
+                    {d.awaitingReturn > 0 ? ' (coming back: check it in under Deliveries → Coming in)'
                       : d.returnChecked ? ` (${[d.returnChecked.backInStock > 0 && `${formatQty(d.returnChecked.backInStock, o.unit)} back in stock`, d.returnChecked.writtenOff > 0 && `${formatQty(d.returnChecked.writtenOff, o.unit)} written off`].filter(Boolean).join(', ')})` : ''}</span>}
                 </>
               : '🚚 on its way'}
             {' '}<TxLink hash={d.sentTxHash} label="Sent" className="ml-1" />{d.status === 'delivered' && <TxLink hash={d.receivedTxHash} label="Received" className="ml-2" />}
           </p>
+          <Refs x={{ senderRef: d.senderRef, receiverRef: d.receiverRef }} />
           {d.deliveryNotes && <p className="italic text-gray-700">💬 {o.restaurantName}: "{d.deliveryNotes}"</p>}
           {d.hasDeliveryPhoto && <DeliveryPhotoButton shipmentId={d.shipmentId} token={token} />}
+          {d.missing > 0 && (
+            <div className="text-amber-900 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+              ⚠️ <strong>{formatQty(d.missing, o.unit)}</strong> didn't arrive (not accepted or refused).{' '}
+              {d.missingResolution === 'waived' ? 'Not charged.' : d.missingResolution === 'charged' ? 'Charged (agreed with the café).' : 'Talk to the café, then decide:'}
+              {onResolve && (
+                <span className="inline-flex gap-2 ml-1">
+                  {d.missingResolution !== 'waived' && <button disabled={busy} onClick={() => onResolve(d, 'waived')} className="underline font-semibold">Don't charge</button>}
+                  {d.missingResolution !== 'charged' && <button disabled={busy} onClick={() => onResolve(d, 'charged')} className="underline font-semibold">Charge it</button>}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -249,6 +295,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
   const [fee,     setFee]     = useState({});     // orderId → delivery charge (£)
   const [rest,    setRest]    = useState({});     // orderId → { close, note } when sending only part
   const [frz,     setFrz]     = useState({});     // orderId → { on, date } — meat sent frozen
+  const [myRef,   setMyRef]   = useState({});     // orderId → the farm's own reference (invoice / delivery note no.)
   const [carriers, setCarriers] = useState([]);   // registered depots / couriers
   const auth = { headers: { Authorization: `Bearer ${farmerToken}` } };
 
@@ -293,6 +340,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
     const note = window.prompt(part ? `Close the remaining ${formatQty(o.outstanding, o.unit)}? Message to the café (e.g. out of stock):` : 'Reason for declining (optional):') ?? null;
     if (note !== null) act(o, 'decline', { note });
   };
+  const resolve = (o) => (d, resolution) => act(o, 'missing', { shipmentId: d.shipmentId, resolution });
   const restBody = (o, sendQty) => (sendQty < o.outstanding && rest[o.id]?.close ? { closeRest: true, shortNote: rest[o.id].note || undefined } : {});
 
   return (
@@ -324,14 +372,14 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
               <div key={o.id} className="border-2 border-rose-200 bg-rose-50 rounded-lg p-4">
                 <div className="flex justify-between items-start gap-3 flex-wrap">
                   <div>
-                    <p className="font-bold text-gray-800">{o.restaurantName}</p>
+                    <p className="font-bold text-gray-800">{o.restaurantName} <Refs x={o} className="ml-1" /></p>
                     <p className="text-sm text-gray-700">wants <strong>{formatQty(o.quantity, o.unit)}</strong> of {o.productName} {o.preOrder && <span className="text-xs font-semibold bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded">pre-order</span>}
                       {o.frozen && <span className="ml-1 text-xs font-semibold bg-sky-100 text-sky-800 px-1.5 py-0.5 rounded">❄️ frozen please</span>}</p>
                     <SentSoFar o={o} />
-                    <DeliveryResults o={o} token={farmerToken} />
+                    <DeliveryResults o={o} token={farmerToken} onResolve={resolve(o)} busy={busyId === o.id} />
                     {o.neededUntil && <p className="text-xs text-gray-600">Needed by {day(o.neededUntil)}</p>}
                     {o.note && <p className="text-sm text-gray-600 italic mt-1">"{o.note}"</p>}
-                    {o.unitPrice != null && <p className="text-xs text-gray-700 mt-1">💷 {gbp(o.unitPrice)}/{o.unit} from your meat list ≈ {gbp(o.unitPrice * o.quantity)}</p>}
+                    {o.unitPrice != null && <p className="text-xs text-gray-700 mt-1">💷 {gbp(o.unitPrice)}/{o.unit} from your meat prices ≈ {gbp(o.unitPrice * o.quantity)}</p>}
                   </div>
                   <Badge status={o.status} />
                 </div>
@@ -354,7 +402,10 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                       </div>
                     ))}
                     <RestChoice left={o.outstanding} sending={sendQty} unit={o.unit} value={rest[o.id]} onChange={(v) => setRest({ ...rest, [o.id]: v })} />
-                    <div className="mt-2"><FrozenChoice value={frz[o.id]} wanted={o.frozen} disabled={busyId === o.id} onChange={(v) => setFrz({ ...frz, [o.id]: v })} /></div>
+                    <div className="mt-2 flex flex-wrap gap-3 items-center">
+                      <FrozenChoice value={frz[o.id]} wanted={o.frozen} disabled={busyId === o.id} onChange={(v) => setFrz({ ...frz, [o.id]: v })} />
+                      <RefInput value={myRef[o.id]} onChange={(v) => setMyRef({ ...myRef, [o.id]: v })} disabled={busyId === o.id} className="flex-1 min-w-[12rem]" />
+                    </div>
                     <div className="flex gap-2 mt-2 flex-wrap items-center text-sm">
                       <select value={via[o.id] || ''} onChange={(e) => setVia({ ...via, [o.id]: e.target.value })} disabled={busyId === o.id}
                         className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
@@ -372,6 +423,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                       onClick={() => act(o, 'dispatch', {
                         allocations: plan.map(a => ({ shipmentId: a.shipmentId, quantity: toNum(a.quantity), unitPrice: toNum(a.unitPrice) ?? undefined })),
                         via: via[o.id] || undefined, deliveryFee: toNum(fee[o.id]) ?? undefined, ...restBody(o, sendQty), ...frozenBody(frz[o.id], o.frozen),
+                        senderRef: myRef[o.id] || undefined,
                       })}
                       disabled={busyId === o.id || !approved || !plan.length || !(sendQty > 0)}
                       className="mt-2 bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
@@ -410,12 +462,12 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
             <div key={o.id} className="border-2 border-yellow-300 bg-yellow-50 rounded-lg p-4">
               <div className="flex justify-between items-start gap-3 flex-wrap">
                 <div>
-                  <p className="font-bold text-gray-800">{o.restaurantName}</p>
+                  <p className="font-bold text-gray-800">{o.restaurantName} <Refs x={o} className="ml-1" /></p>
                   <p className="text-sm text-gray-700">
                     wants <strong>{formatQty(o.quantity, o.unit)}</strong> of {o.productName}{o.isDeal ? ' 🏷️ (your short-date deal)' : ''}
                   </p>
                   <SentSoFar o={o} />
-                  <DeliveryResults o={o} token={farmerToken} />
+                  <DeliveryResults o={o} token={farmerToken} onResolve={resolve(o)} busy={busyId === o.id} />
                   {o.neededUntil && <p className="text-xs text-gray-600">Needs to last until {day(o.neededUntil)}</p>}
                   {o.note && <p className="text-sm text-gray-600 italic mt-1">"{o.note}"</p>}
                 </div>
@@ -454,6 +506,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                 <label className="text-gray-600 ml-2">🚚 Delivery £</label>
                 <input type="number" step="0.01" min="0" value={fee[o.id] ?? ''} onChange={(e) => setFee({ ...fee, [o.id]: e.target.value })}
                   placeholder="0.00" className="w-24 px-3 py-2 border border-gray-300 rounded-lg" disabled={busyId === o.id} />
+                <RefInput value={myRef[o.id]} onChange={(v) => setMyRef({ ...myRef, [o.id]: v })} disabled={busyId === o.id} placeholder="Your ref (optional)" className="w-40" />
                 <span className="ml-2 font-semibold text-gray-800">
                   {formatQty(Math.round(sendQty * 1000) / 1000, o.unit)} · {total != null ? <>Total {gbp(total)}</> : <span className="text-gray-400 font-normal">set prices to see the total</span>}
                 </span>
@@ -466,6 +519,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                     via: via[o.id] || undefined,
                     deliveryFee: toNum(fee[o.id]) ?? undefined,
                     ...restBody(o, Math.round(sendQty * 1000) / 1000),
+                    senderRef: myRef[o.id] || undefined,
                   })}
                   disabled={busyId === o.id || !approved || !plan.length || !(sendQty > 0)}
                   className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400"
@@ -487,7 +541,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
           {done.map(o => (
             <div key={o.id} className="border border-gray-200 rounded-lg p-4 flex justify-between items-start gap-3">
               <div className="flex-1 min-w-0">
-                <p className="font-semibold text-gray-800">{o.restaurantName} · {formatQty(o.quantitySent ?? o.quantity, o.unit)} {o.productName}</p>
+                <p className="font-semibold text-gray-800">{o.restaurantName} · {formatQty(o.quantitySent ?? o.quantity, o.unit)} {o.productName} <Refs x={o} className="ml-1" /></p>
                 {o.status === 'closed_short' && (
                   <p className="text-xs text-gray-700">Ordered {formatQty(o.quantity, o.unit)}, sent {formatQty(o.quantitySent || 0, o.unit)}. Rest closed{o.farmerNote ? `: "${o.farmerNote}"` : ''}</p>
                 )}
@@ -496,7 +550,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                 <p className="font-mono text-xs text-gray-400">
                   {o.dispatches?.length ? o.dispatches.map(d => d.batchId).join(' + ') : `${o.batchId || ''}${o.shipmentId ? ` · shipment #${o.shipmentId}` : ''}`}
                 </p>
-                <DeliveryResults o={o} token={farmerToken} />
+                <DeliveryResults o={o} token={farmerToken} onResolve={resolve(o)} busy={busyId === o.id} />
                 {o.total != null && (
                   <p className="text-xs text-gray-700 mt-1">
                     💷 {o.unitPrice != null && <>{gbp(o.unitPrice)}/{o.unit}</>}
@@ -504,6 +558,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                     {' '}= <strong>{gbp(o.total)}</strong>{o.totalIsEstimate ? ' (estimate)' : ''}
                   </p>
                 )}
+                <OwedLine o={o} />
                 <TermsCheck order={o} token={farmerToken} />
               </div>
               <div className="text-right space-y-1 shrink-0">
@@ -537,6 +592,7 @@ export function DispatchForm({ farmerToken, batch, batches = [], preselected = [
   const [to,       setTo]       = useState('');
   const [quantity, setQuantity] = useState('');
   const [notes,    setNotes]    = useState('');
+  const [myRef,    setMyRef]    = useState('');     // the farm's own reference (v4.3)
   const [via,      setVia]      = useState('');
   const [busy,     setBusy]     = useState(false);
   const [error,    setError]    = useState(null);
@@ -605,7 +661,7 @@ export function DispatchForm({ farmerToken, batch, batches = [], preselected = [
         let shipmentId = done[l.b.batchId];
         if (!shipmentId) {
           const res = await axios.post(`${API_BASE}/farmer/dispatch`,
-            { batchId: l.b.batchId, to, quantity: l.q, notes: l.notes, via: via || undefined }, auth);
+            { batchId: l.b.batchId, to, quantity: l.q, notes: l.notes, via: via || undefined, senderRef: myRef || undefined }, auth);
           shipmentId = res.data.shipmentId;
           done[l.b.batchId] = shipmentId;
           setSent({ ...done });
@@ -725,6 +781,7 @@ export function DispatchForm({ farmerToken, batch, batches = [], preselected = [
       <input type="text" value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={200}
         placeholder={isLivestock ? 'Notes (optional), e.g. haulier, trailer reg' : 'Notes (optional), e.g. 20 crates, chilled'}
         className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+      <RefInput value={myRef} onChange={setMyRef} disabled={busy} placeholder={isLivestock ? 'Your ref (optional), e.g. movement or load no.' : undefined} className="w-full" />
       {isLivestock && <FciFields value={fci} onChange={setFci} disabled={busy} />}
       {error && <p className="text-sm text-red-600">⚠️ {error}</p>}
       {!error && missing.length > 0 && <p className="text-xs text-gray-500">Still needed: {missing.join(', ')}</p>}
@@ -787,17 +844,16 @@ export function FarmerShipments({ farmerToken, refreshKey = 0, onChanged }) {
   };
 
   if (shipments.length === 0) return null;
-  const comingBack = shipments.filter(s => s.awaitingReturn > 0);
+  const comingBack = shipments.filter(s => s.awaitingReturn > 0);   // checked in under "Coming in" (v4.3)
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
       <h3 className="text-xl font-bold text-gray-800 mb-4">🚚 Shipments sent</h3>
       {error && <p className="text-sm text-red-600 mb-3">⚠️ {error}</p>}
       {comingBack.length > 0 && (
-        <div className="mb-4 space-y-2">
-          <p className="text-sm font-bold text-orange-800">↩️ Refused, coming back to you ({comingBack.length}): check {comingBack.length === 1 ? 'it' : 'them'} in</p>
-          {comingBack.map(s => <ReturnCheck key={s.shipmentId} s={s} token={farmerToken} onDone={() => { load(); onChanged?.(); }} />)}
-        </div>
+        <p className="mb-3 text-sm text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
+          ↩️ {comingBack.length} refused {comingBack.length === 1 ? 'delivery is' : 'deliveries are'} coming back: check {comingBack.length === 1 ? 'it' : 'them'} in under <strong>📥 Coming in</strong> above.
+        </p>
       )}
       <div className="divide-y divide-gray-100">
         {shipments.map(s => (
@@ -806,6 +862,7 @@ export function FarmerShipments({ farmerToken, refreshKey = 0, onChanged }) {
               <p className="font-semibold text-gray-800">
                 #{s.shipmentId} · {formatQty(s.quantitySent, s.unit)} {s.productName} → {s.toName}
               </p>
+              <Refs x={s} />
               <p className="flex gap-3"><TxLink hash={s.sentTxHash} label="Sent" />{s.status === 'delivered' && <TxLink hash={s.receivedTxHash} label="Received" />}</p>
               {s.carrierName && <p className="text-xs text-gray-500">via {s.carrierName}</p>}
               {s.handlingSteps?.length > 0 && (
@@ -821,7 +878,7 @@ export function FarmerShipments({ farmerToken, refreshKey = 0, onChanged }) {
               {s.status === 'delivered' && (
                 <p className={`text-xs mt-1 ${s.shortfall > 0 ? 'text-orange-600 font-semibold' : 'text-gray-500'}`}>
                   Received {formatQty(s.quantityReceived, s.unit)}{s.quantityRejected > 0 ? ` · ↩️ ${formatQty(s.quantityRejected, s.unit)} refused ${
-                    s.awaitingReturn > 0 ? '(coming back: check it in above)'
+                    s.awaitingReturn > 0 ? '(coming back: check it in under Coming in)'
                     : s.returnChecked ? `(checked: ${[s.returnChecked.backInStock > 0 && `${formatQty(s.returnChecked.backInStock, s.unit)} back in stock`, s.returnChecked.writtenOff > 0 && `${formatQty(s.returnChecked.writtenOff, s.unit)} written off`].filter(Boolean).join(', ')})`
                     : '(back in your stock)'}` : ''}{s.shortfall > 0 ? ` · ⚠️ ${formatQty(s.shortfall, s.unit)} missing` : ''}
                 </p>
@@ -874,21 +931,34 @@ export function FarmerShipments({ farmerToken, refreshKey = 0, onChanged }) {
 // Coming in to the farm: returns, and boxed meat back from the abattoir (private kill).
 // Stock received can be sent on to cafés / depots.
 // ─────────────────────────────────────────────
-export function FarmerReturns({ farmerToken, refreshKey = 0, onChanged }) {
+// v4.3 — "Coming in" is only for things arriving at the farm: boxed meat from the abattoir, café returns, and refused goods
+// coming back. Once confirmed they leave the list; what's kept shows under Stock (FarmerHeldStock).
+export function FarmerComingIn(props) { return <FarmerReturns {...props} mode="coming" />; }
+// Stock the farm holds from deliveries it received (boxed meat back from the abattoir, returns): send it on from here.
+//   filter: 'all' | 'meat' (boxed meat) | 'produce' (returned produce)
+export function FarmerHeldStock(props) { return <FarmerReturns {...props} mode="stock" />; }
+
+export function FarmerReturns({ farmerToken, refreshKey = 0, onChanged, mode = 'coming', filter = 'all' }) {
   const [shipments, setShipments] = useState([]);
+  const [sentOut,   setSentOut]   = useState([]);   // what the farm sent (for refused goods coming back)
   const [participants, setParticipants] = useState([]);
   const [qty,    setQty]    = useState({});
-  const [send,   setSend]   = useState(null);   // { id, to, quantity, via, notes } — the "send on" form
+  const [send,   setSend]   = useState(null);   // { id, to, quantity, via, notes, senderRef } — the "send on" form
   const [busyId, setBusyId] = useState(null);
   const [error,  setError]  = useState(null);
+  const [loaded, setLoaded] = useState(false);
   const auth = { headers: { Authorization: `Bearer ${farmerToken}` } };
 
-  const load = () => axios.get(`${API_BASE}/farmer/inbound`, auth)
-    .then(res => setShipments(res.data.shipments || []))
-    .catch(() => {});
+  const load = async () => {
+    const [i, o] = await Promise.all([
+      axios.get(`${API_BASE}/farmer/inbound`, auth).then(r => r.data.shipments || []).catch(() => []),
+      mode === 'coming' ? axios.get(`${API_BASE}/farmer/shipments`, auth).then(r => r.data.shipments || []).catch(() => []) : Promise.resolve([]),
+    ]);
+    setShipments(i); setSentOut(o); setLoaded(true);
+  };
   useEffect(() => { load(); }, [refreshKey]);
   useEffect(() => {
-    axios.get(`${API_BASE}/participants`).then(r => setParticipants(r.data.participants || [])).catch(() => {});
+    if (mode === 'stock') axios.get(`${API_BASE}/participants`).then(r => setParticipants(r.data.participants || [])).catch(() => {});
   }, []);
 
   const receive = async (s) => {
@@ -913,7 +983,7 @@ export function FarmerReturns({ farmerToken, refreshKey = 0, onChanged }) {
     setError(null);
     try {
       await axios.post(`${API_BASE}/farmer/shipments/${send.id}/forward`,
-        { to: send.to, quantity: Number(send.quantity), via: send.via || undefined, notes: send.notes || '' }, auth);
+        { to: send.to, quantity: Number(send.quantity), via: send.via || undefined, notes: send.notes || '', senderRef: send.senderRef || undefined }, auth);
       setSend(null);
       await load();
       onChanged?.();
@@ -924,45 +994,82 @@ export function FarmerReturns({ farmerToken, refreshKey = 0, onChanged }) {
     }
   };
 
-  const incoming = shipments.filter(s => s.status === 'in_transit');
-  const inStock = shipments.filter(s => s.status === 'delivered' && s.available > 0);
-  const done = shipments.filter(s => s.status === 'delivered' && !(s.available > 0)).slice(0, 10);
-  if (shipments.length === 0) return null;
   const fromLabel = (s) => (s.kind === 'return' ? 'back from' : 'from');
+  const day = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 
+  // ── Coming in ──
+  if (mode === 'coming') {
+    const incoming = shipments.filter(s => s.status === 'in_transit');
+    const comingBack = sentOut.filter(s => s.awaitingReturn > 0);
+    const recent = shipments.filter(s => s.status === 'delivered').slice(0, 5);
+    const waiting = incoming.length + comingBack.length;
+    return (
+      <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+        <h3 className="text-xl font-bold text-gray-800 mb-1">📥 Coming in {waiting > 0 && <span className="text-sm bg-yellow-400 text-yellow-900 rounded-full px-2 py-0.5 ml-1">{waiting} to confirm</span>}</h3>
+        <p className="text-sm text-gray-500 mb-4">Everything arriving at the farm: boxed meat from the abattoir, returns, and goods a café refused. Confirm each one when it's here. What you keep moves to <strong>📦 Stock</strong>.</p>
+        {error && <p className="text-sm text-red-600 mb-3">⚠️ {error}</p>}
+        {loaded && waiting === 0 && <p className="text-sm text-gray-500 mb-3">✅ Nothing on its way to you right now.</p>}
+        <div className="space-y-3">
+          {comingBack.map(s => <ReturnCheck key={`r${s.shipmentId}`} s={s} token={farmerToken} onDone={() => { load(); onChanged?.(); }} />)}
+          {incoming.map(s => (
+            <div key={s.shipmentId} className="border-2 border-yellow-300 bg-yellow-50 rounded-lg p-4">
+              <p className="font-bold text-gray-800">{formatQty(s.quantitySent, s.unit)} {s.productName} {fromLabel(s)} {s.fromName} <Refs x={s} className="ml-1" /></p>
+              <p className="text-xs text-gray-500">delivery #{s.shipmentId}{s.useBy ? ` · use by ${day(s.useBy)}` : ''}{s.frozenOn ? ' · ❄️ frozen' : ''} <TxLink hash={s.sentTxHash} label="Sent" className="ml-1" /></p>
+              {s.dispatchNotes && <p className="text-sm text-gray-600 italic">"{s.dispatchNotes}"</p>}
+              {s.recalled && <p className="text-xs text-red-700 font-semibold">🚨 Recalled batch</p>}
+              <div className="flex gap-2 mt-3 flex-wrap items-center">
+                <span className="text-sm text-gray-600">Arrived:</span>
+                <input type="number" step="any" min="0" max={s.quantitySent}
+                  value={qty[s.shipmentId] ?? s.quantitySent}
+                  onChange={(e) => setQty({ ...qty, [s.shipmentId]: e.target.value })}
+                  className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-sm" disabled={busyId === s.shipmentId} />
+                <span className="text-sm text-gray-500">{s.unit}</span>
+                <button onClick={() => receive(s)} disabled={busyId === s.shipmentId}
+                  className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
+                  {busyId === s.shipmentId ? '⛓️ Recording…' : '✅ Confirm arrived'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+        {recent.length > 0 && (
+          <div className="mt-4">
+            <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Recently arrived</p>
+            {recent.map(s => (
+              <div key={s.shipmentId} className="text-sm text-gray-600 border-b border-gray-100 py-1.5">
+                #{s.shipmentId} · {formatQty(s.quantityReceived, s.unit)} {s.productName} {fromLabel(s)} {s.fromName}
+                <span className="text-gray-400"> · {s.deliveredAt ? day(s.deliveredAt) : ''}</span>
+                <TxLink hash={s.receivedTxHash} label="Received" className="ml-2" />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Stock held from deliveries (boxed meat, returns) ──
+  const inStock = shipments.filter(s => s.status === 'delivered' && s.available > 0)
+    .filter(s => filter === 'all' || (filter === 'meat' ? s.productType === 'Meat' : filter === 'produce' ? s.productType !== 'Meat' && s.productType !== 'Livestock' : false));
+  if (!inStock.length) return null;
+  const meatOnly = inStock.every(s => s.productType === 'Meat');
   return (
     <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-      <h3 className="text-xl font-bold text-gray-800 mb-1">📥 Coming in {incoming.length > 0 && <span className="text-sm bg-yellow-400 text-yellow-900 rounded-full px-2 py-0.5 ml-1">{incoming.length} on the way</span>}</h3>
-      <p className="text-sm text-gray-500 mb-4">Returns, and boxed meat back from the abattoir. Confirm how much arrived, then send it on to cafés.</p>
+      <h3 className="text-xl font-bold text-gray-800 mb-1">{meatOnly ? '🥩 Boxed meat' : '📦 Stock from deliveries'} <span className="text-sm font-normal text-gray-500">({inStock.length})</span></h3>
+      <p className="text-sm text-gray-500 mb-4">{meatOnly ? 'Cuts back from the abattoir (private kill).' : 'Boxed meat back from the abattoir, and goods returned to you.'} Cafés can order it from your meat prices; send it from Orders, or send some on from here.</p>
       {error && <p className="text-sm text-red-600 mb-3">⚠️ {error}</p>}
-      <div className="space-y-3">
-        {incoming.map(s => (
-          <div key={s.shipmentId} className="border-2 border-yellow-300 bg-yellow-50 rounded-lg p-4">
-            <p className="font-bold text-gray-800">{formatQty(s.quantitySent, s.unit)} {s.productName} {fromLabel(s)} {s.fromName}</p>
-            {s.dispatchNotes && <p className="text-sm text-gray-600 italic">"{s.dispatchNotes}"</p>}
-            {s.recalled && <p className="text-xs text-red-700 font-semibold">🚨 Recalled batch</p>}
-            <div className="flex gap-2 mt-3 flex-wrap items-center">
-              <span className="text-sm text-gray-600">Arrived:</span>
-              <input type="number" step="any" min="0" max={s.quantitySent}
-                value={qty[s.shipmentId] ?? s.quantitySent}
-                onChange={(e) => setQty({ ...qty, [s.shipmentId]: e.target.value })}
-                className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-sm" disabled={busyId === s.shipmentId} />
-              <span className="text-sm text-gray-500">{s.unit}</span>
-              <button onClick={() => receive(s)} disabled={busyId === s.shipmentId}
-                className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
-                {busyId === s.shipmentId ? '⛓️ Recording…' : '✅ Confirm arrived'}
-              </button>
-            </div>
-          </div>
-        ))}
-
+      <div className="grid sm:grid-cols-2 gap-3">
         {inStock.map(s => (
-          <div key={s.shipmentId} className="border border-green-200 bg-green-50 rounded-lg p-4">
-            <div className="flex justify-between gap-2 flex-wrap">
-              <p className="font-semibold text-gray-800">{s.productName} {fromLabel(s)} {s.fromName}</p>
-              <p className="font-bold text-sm text-gray-800">{formatQty(s.available, s.unit)} in stock</p>
+          <div key={s.shipmentId} className={`border rounded-lg p-4 ${s.recalled ? 'border-red-300 bg-red-50' : 'border-green-200 bg-green-50'}`}>
+            <div className="flex justify-between gap-2">
+              <p className="font-semibold text-gray-800">{s.productName}</p>
+              <p className="font-bold text-sm text-gray-800 shrink-0">{formatQty(s.available, s.unit)}</p>
             </div>
-            {s.useBy && <p className="text-xs text-gray-500">Use by {new Date(s.useBy).toLocaleDateString('en-GB')}</p>}
+            <p className="text-xs text-gray-600">{fromLabel(s)} {s.fromName}{s.animalRef ? ` · ${s.animalRef}` : ''}</p>
+            <p className="text-xs text-gray-500">
+              {s.useBy ? `Use by ${new Date(s.useBy).toLocaleDateString('en-GB')}` : 'No use-by'}{s.frozenOn ? ` · ❄️ frozen ${new Date(s.frozenOn).toLocaleDateString('en-GB')}` : ''} · arrived {s.deliveredAt ? day(s.deliveredAt) : '—'}
+            </p>
+            {s.allergens?.length > 0 && <p className="text-xs text-amber-800">⚠️ Contains: {s.allergens.join(', ')}</p>}
             {s.recalled && <p className="text-xs text-red-700 font-semibold">🚨 Recalled — don't send it on</p>}
             {send?.id === s.shipmentId ? (
               <div className="mt-2 space-y-2">
@@ -981,12 +1088,13 @@ export function FarmerReturns({ farmerToken, refreshKey = 0, onChanged }) {
                 <div className="flex gap-2 items-center flex-wrap">
                   <input type="number" step="any" min="0.001" max={s.available} value={send.quantity}
                     onChange={(e) => setSend({ ...send, quantity: e.target.value })}
-                    className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+                    className="w-24 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
                   <span className="text-sm text-gray-500">{s.unit}</span>
                   <input type="text" maxLength={280} placeholder="Notes (optional)" value={send.notes}
                     onChange={(e) => setSend({ ...send, notes: e.target.value })}
                     className="flex-1 min-w-[8rem] px-3 py-2 border border-gray-300 rounded-lg text-sm" />
                 </div>
+                <RefInput value={send.senderRef} onChange={(v) => setSend({ ...send, senderRef: v })} className="w-full" />
                 <div className="flex gap-2">
                   <button onClick={sendOn} disabled={busyId === s.shipmentId}
                     className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
@@ -996,20 +1104,62 @@ export function FarmerReturns({ farmerToken, refreshKey = 0, onChanged }) {
                 </div>
               </div>
             ) : !s.recalled && (
-              <button onClick={() => setSend({ id: s.shipmentId, to: '', quantity: String(s.available), via: '', notes: '' })}
+              <button onClick={() => setSend({ id: s.shipmentId, to: '', quantity: String(s.available), via: '', notes: '', senderRef: '' })}
                 className="mt-2 text-sm text-green-700 font-semibold hover:underline">🚚 Send some on</button>
             )}
           </div>
         ))}
-
-        {done.map(s => (
-          <div key={s.shipmentId} className="text-sm text-gray-600 border-b border-gray-100 pb-2">
-            #{s.shipmentId} · {formatQty(s.quantityReceived, s.unit)} {s.productName} {fromLabel(s)} {s.fromName}
-            <span className="text-gray-400"> · {s.deliveredAt ? new Date(s.deliveredAt).toLocaleDateString('en-GB') : ''}</span>
-            <TxLink hash={s.receivedTxHash} label="Received" className="ml-2" />
-          </div>
-        ))}
       </div>
+    </div>
+  );
+}
+
+// v4.3 — a simple log of the farm's written-off stock (refused goods it wrote off, animals condemned at the abattoir)
+export function WriteOffLog({ farmerToken, refreshKey = 0 }) {
+  const [rows, setRows] = useState(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    axios.get(`${API_BASE}/farmer/write-offs`, { headers: { Authorization: `Bearer ${farmerToken}` } })
+      .then(r => setRows(r.data.writeOffs || [])).catch(() => setRows([]));
+  }, [refreshKey]);
+  if (!rows) return null;
+  const since = new Date(); since.setDate(1); since.setHours(0, 0, 0, 0);
+  const month = rows.filter(r => new Date(r.at) >= since);
+  const byUnit = (list) => Object.entries(list.reduce((m, r) => ({ ...m, [r.unit]: Math.round(((m[r.unit] || 0) + r.quantity) * 1000) / 1000 }), {}))
+    .map(([u, q]) => formatQty(q, u)).join(' + ');
+  return (
+    <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+      <button onClick={() => setOpen(!open)} className="w-full flex justify-between items-center text-left">
+        <span>
+          <span className="text-xl font-bold text-gray-800">🗑️ Written off</span>
+          <span className="block text-sm text-gray-500">{rows.length ? `This month: ${month.length ? byUnit(month) : 'nothing'} · ${rows.length} in total` : 'Nothing written off yet.'}</span>
+        </span>
+        {rows.length > 0 && <span className="text-sm text-gray-600 shrink-0">{open ? 'Hide ▴' : 'Show ▾'}</span>}
+      </button>
+      {open && rows.length > 0 && (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+              <th className="py-1.5 pr-3 font-semibold">Date</th><th className="py-1.5 pr-3 font-semibold">What</th>
+              <th className="py-1.5 pr-3 font-semibold text-right">Amount</th><th className="py-1.5 pr-3 font-semibold">Why</th><th className="py-1.5 font-semibold"></th>
+            </tr></thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i} className="border-b border-gray-100 align-top">
+                  <td className="py-1.5 pr-3 whitespace-nowrap text-gray-600">{new Date(r.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' })}</td>
+                  <td className="py-1.5 pr-3">
+                    <span className="text-gray-800">{r.productName}</span>{r.animalRef && <span className="text-gray-500"> · {r.animalRef}</span>}
+                    <span className="block text-xs text-gray-500">{r.where} · delivery #{r.shipmentId}</span>
+                  </td>
+                  <td className="py-1.5 pr-3 text-right whitespace-nowrap font-semibold text-gray-800">{formatQty(r.quantity, r.unit)}</td>
+                  <td className="py-1.5 pr-3 text-gray-700">{r.reason || <span className="text-gray-400">—</span>}</td>
+                  <td className="py-1.5"><TxLink hash={r.txHash} label="Record" /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -1045,7 +1195,7 @@ export function FarmerMeatList({ farmerToken, refreshKey = 0 }) {
       setCuts(list); setSaved(JSON.stringify(list));
       setOrders((o.data.orders || []).filter(x => x.isMeat && x.open));
       if (list.length && !list.some(c => c.species === 'Cattle')) setTab(list[0].species);
-    } catch (err) { setError(err.response?.data?.error || 'Could not load your meat list'); }
+    } catch (err) { setError(err.response?.data?.error || 'Could not load your meat prices'); }
   };
   useEffect(() => { load(); }, [refreshKey]);
   if (!cuts) return null;
@@ -1062,7 +1212,7 @@ export function FarmerMeatList({ farmerToken, refreshKey = 0 }) {
     try {
       const r = await axios.put(`${API_BASE}/farmer/meat-list`, { cuts: cuts.filter(c => c.cutName.trim()).map(c => ({ ...c, pricePerKg: c.pricePerKg === '' ? null : Number(c.pricePerKg) })) }, auth);
       const list = r.data.cuts.map(c => ({ ...c, pricePerKg: c.pricePerKg ?? '' }));
-      setCuts(list); setSaved(JSON.stringify(list)); setMsg('Meat list saved. Cafés can order from it now.');
+      setCuts(list); setSaved(JSON.stringify(list)); setMsg('Meat prices saved. Cafés can order from them now.');
     } catch (err) { setError(err.response?.data?.error || 'Could not save'); }
     finally { setBusy(false); }
   };
@@ -1070,7 +1220,7 @@ export function FarmerMeatList({ farmerToken, refreshKey = 0 }) {
   return (
     <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
       <button onClick={() => setOpen(!open)} className="w-full flex justify-between items-center text-left">
-        <span className="text-xl font-bold text-gray-800">🥩 Meat list & cutting list</span>
+        <span className="text-xl font-bold text-gray-800">🏷️ Meat prices & cutting list</span>
         <span className="text-sm text-gray-500">
           {[cuts.length ? `${cuts.length} cut${cuts.length === 1 ? '' : 's'} listed` : 'no cuts listed yet', toCut.length && `📋 ${toCut.length} pre-order${toCut.length === 1 ? '' : 's'}`].filter(Boolean).join(' · ')} {open ? '▴' : '▾'}
         </span>
@@ -1142,7 +1292,7 @@ export function FarmerMeatList({ farmerToken, refreshKey = 0 }) {
           <div className="flex gap-2 items-center">
             <button onClick={save} disabled={busy || !dirty || !!dup}
               className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
-              {busy ? 'Saving…' : dirty ? 'Save meat list' : 'Saved'}
+              {busy ? 'Saving…' : dirty ? 'Save meat prices' : 'Saved'}
             </button>
             {dirty && <button onClick={() => setCuts(JSON.parse(saved))} className="text-sm text-gray-600 hover:underline">Undo changes</button>}
           </div>

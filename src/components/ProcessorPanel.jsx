@@ -9,7 +9,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { API_BASE, EXPLORER, formatQty, metaMaskSign, walletSignIn, walletError } from './walletHelpers';
 import { TxLink, ChainHelp } from './ChainProof';
-import { ReturnCheck, FrozenChoice, frozenBody } from './FarmerSupply';
+import { ReturnCheck, FrozenChoice, frozenBody, Refs, RefInput } from './FarmerSupply';
 
 const TEMPLATE = [
   'animal,head,kill_number,kill_date,cold_weight_kg,category,conformation,fat_class,status,notes',
@@ -270,7 +270,7 @@ function AnimalsIn({ data, auth, busy, post }) {
           return (
             <div key={s.shipmentId} className="border-2 border-blue-200 bg-blue-50 rounded-lg p-3">
               <p className="font-semibold text-gray-800">{formatQty(s.quantitySent, 'head')} {s.productName} from {s.fromName}</p>
-              <p className="text-xs text-gray-600">{s.species} · <span className="font-mono">{s.animalRef}</span> · delivery #{s.shipmentId}{s.dispatchNotes ? ` · "${s.dispatchNotes}"` : ''}</p>
+              <p className="text-xs text-gray-600">{s.species} · <span className="font-mono">{s.animalRef}</span> · delivery #{s.shipmentId}{s.dispatchNotes ? ` · "${s.dispatchNotes}"` : ''} <Refs x={s} /></p>
               <FciBadge s={s} /><FciView id={s.shipmentId} />
               {!r ? (
                 <div className="flex gap-2 mt-2 items-center flex-wrap">
@@ -569,7 +569,7 @@ function MadeHere({ data, post, postMany, busy, participants }) {
   const sendSelected = async () => {
     const calls = pickedList.map(b => ({
       path: '/processor/dispatch',
-      body: { batchId: b.batchId, to: bulk.to, quantity: Number(bulk.qty[b.batchId] ?? b.remaining), via: bulk.via || undefined, notes: bulk.notes },
+      body: { batchId: b.batchId, to: bulk.to, quantity: Number(bulk.qty[b.batchId] ?? b.remaining), via: bulk.via || undefined, notes: bulk.notes, senderRef: bulk.senderRef || undefined },
       label: `${b.productName} ${formatQty(Number(bulk.qty[b.batchId] ?? b.remaining), b.unit)}`
     }));
     const n = await postMany('bulk', calls, setStep);
@@ -707,6 +707,7 @@ function MadeHere({ data, post, postMany, busy, participants }) {
                   </div>
                   <input value={bulk.notes} maxLength={280} onChange={(e) => setBulk({ ...bulk, notes: e.target.value })} placeholder="Notes for every box (optional), e.g. vac-packed, 2 crates"
                     className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm" />
+                  <RefInput value={bulk.senderRef} onChange={(v) => setBulk({ ...bulk, senderRef: v })} className="w-full" />
                   <p className="text-xs text-gray-500">Each product goes as its own delivery, so each one keeps its own trace back to the farm.</p>
                   <div className="flex gap-2 items-center">
                     <button disabled={busy !== null || !bulk.to || pickedList.some(b => { const v = Number(bulk.qty[b.batchId] ?? b.remaining); return !(v > 0) || v > b.remaining; })}
@@ -757,6 +758,7 @@ function SendForm({ b, sendOf, setSendOf, me, participants, post, busy, onClose 
       </div>
       <input type="text" maxLength={280} placeholder="Notes (optional), e.g. 6 boxes, vac-packed" value={sendOf.notes} onChange={(e) => setSendOf({ ...sendOf, notes: e.target.value })}
         className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+      <RefInput value={sendOf.senderRef} onChange={(v) => setSendOf({ ...sendOf, senderRef: v })} className="w-full" />
       {missing.length > 0 && <p className="text-xs text-gray-500">Still needed: {missing.join(', ')}</p>}
       <div className="flex gap-2 items-center">
         <button disabled={busy !== null || missing.length > 0} onClick={async () => {
@@ -1039,7 +1041,7 @@ function OrdersToSend({ data, post, busy, participants }) {
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
       <h3 className="text-lg font-bold text-gray-800 mb-1">4. Café orders to send</h3>
-      <p className="text-sm text-gray-500 mb-3">Cafés order cuts from a farm's meat list. When the cuts are here, send them straight to the café, all at once or part now and the rest later.</p>
+      <p className="text-sm text-gray-500 mb-3">Cafés order cuts from a farm's meat prices. When the cuts are here, send them straight to the café, all at once or part now and the rest later.</p>
       {data.orders.length === 0 && <p className="text-sm text-gray-500">No café orders for meat you're holding.</p>}
 
       {ready.length > 0 && (
@@ -1057,6 +1059,7 @@ function OrdersToSend({ data, post, busy, participants }) {
                   <div>
                     <p className="font-semibold text-gray-800">{formatQty(left, o.unit)} {o.productName} → {o.restaurantName}
                       {o.frozen && <span className="ml-2 text-xs font-semibold bg-sky-100 text-sky-800 px-1.5 py-0.5 rounded">❄️ frozen please</span>}</p>
+                    <Refs x={o} />
                     <p className="text-xs text-gray-600">
                       {o.farmName}'s meat{o.preOrder ? ' · pre-order' : ''}{o.neededUntil ? ` · needed by ${ukDate(o.neededUntil)}` : ''} · ordered {ukDate(o.createdAt)}{sentLine(o)}
                     </p>
@@ -1087,7 +1090,10 @@ function OrdersToSend({ data, post, busy, participants }) {
                       className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm" />}
                   </div>
                 )}
-                <FrozenChoice value={F.frozen} wanted={o.frozen} disabled={busy !== null} onChange={(v) => setF(o.id, { frozen: v })} />
+                <div className="flex flex-wrap gap-3 items-center">
+                  <FrozenChoice value={F.frozen} wanted={o.frozen} disabled={busy !== null} onChange={(v) => setF(o.id, { frozen: v })} />
+                  <RefInput value={F.senderRef} onChange={(v) => setF(o.id, { senderRef: v })} disabled={busy !== null} className="flex-1 min-w-[12rem]" />
+                </div>
                 <div className="flex gap-2 flex-wrap items-center">
                   <select value={F.via} onChange={(e) => setF(o.id, { via: e.target.value })} className="px-2 py-1.5 border border-gray-300 rounded bg-white text-sm">
                     <option value="">Direct (own delivery)</option>
@@ -1100,7 +1106,7 @@ function OrdersToSend({ data, post, busy, participants }) {
                       allocations: o.suggestion.allocations.filter(a => qtyOf(a) > 0).map(a => ({ batchId: a.batchId, quantity: qtyOf(a) })),
                       via: F.via || undefined, notes: F.notes,
                       ...(sending < left && F.close ? { closeRest: true, shortNote: F.note || undefined } : {}),
-                      ...frozenBody(F.frozen, o.frozen),
+                      ...frozenBody(F.frozen, o.frozen), senderRef: F.senderRef || undefined,
                     }, (d) => d.status === 'part_sent' ? `${formatQty(sending, o.unit)} sent to ${o.restaurantName}; ${formatQty(d.outstanding, o.unit)} kept open`
                       : d.status === 'closed_short' ? `${formatQty(sending, o.unit)} sent; the rest closed` : `${o.productName} sent to ${o.restaurantName}`);
                     if (r) { setForm({ ...form, [o.id]: undefined }); setOpenId(null); }
@@ -1126,7 +1132,7 @@ function OrdersToSend({ data, post, busy, participants }) {
               return (
                 <div key={o.id} className="px-3 py-2 text-sm space-y-1">
                   <div className="flex justify-between gap-2 flex-wrap">
-                    <span><strong>{o.productName}</strong> {formatQty(left, o.unit)} for {o.restaurantName}{o.frozen ? ' ❄️' : ''} <span className="text-gray-500">· {o.farmName}{o.neededUntil ? ` · by ${ukDate(o.neededUntil)}` : ''}{sentLine(o)}</span></span>
+                    <span><strong>{o.productName}</strong> {formatQty(left, o.unit)} for {o.restaurantName}{o.frozen ? ' ❄️' : ''} {o.orderRef && <span className="font-mono text-xs text-gray-500">{o.orderRef}</span>} <span className="text-gray-500">· {o.farmName}{o.neededUntil ? ` · by ${ukDate(o.neededUntil)}` : ''}{sentLine(o)}</span></span>
                     <span className="text-xs text-gray-500">
                       {[have > 0 && `${formatQty(have, o.unit)} ready here`, o.atFarm > 0 && `${formatQty(o.atFarm, o.unit)} at the farm (they can send it)`,
                         o.toCut > 0 && `${formatQty(o.toCut, o.unit)} still to cut`].filter(Boolean).join(' · ') || (o.preOrder ? 'pre-order: cut it next time' : 'none ready')}
