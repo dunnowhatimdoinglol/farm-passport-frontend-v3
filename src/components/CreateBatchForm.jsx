@@ -5,7 +5,7 @@ import { batchLink } from './walletHelpers';
 import NfcShare from './NfcShare';
 
 // farmerToken = the farmer's sign-in token (the farm is worked out from it on the server)
-function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuccess, onCancel, onSendToAbattoir }) {
+function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuccess, onCancel, onSendToAbattoir, recent = [] }) {
   const [batchId, setBatchId] = useState('');
   const [productType, setProductType] = useState('Vegetable');
   const [productName, setProductName] = useState('');
@@ -30,6 +30,20 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
   const [showSuccess, setShowSuccess] = useState(false);
   const [createdBatch, setCreatedBatch] = useState(null);
   const [qrCodeUrl, setQrCodeUrl] = useState('');
+  const [warn, setWarn] = useState('');                   // e.g. a note about where the animal was born (v4.4: shown here, not as a pop-up)
+  // v4.4: "Same as last time" — the farm's recent products (not animals), newest first, one each
+  const repeats = [];
+  for (const b of recent) {
+    if (b.productType === 'Livestock' || !b.productName) continue;
+    const k = `${String(b.productName).toLowerCase()}|${b.unit}`;
+    if (!repeats.some(r => r.k === k)) repeats.push({ k, b });
+    if (repeats.length >= 4) break;
+  }
+  const repeat = (b) => {
+    setProductType(b.productType || 'Vegetable'); setProductName(b.productName || ''); setUnit(b.unit || 'kg');
+    setPricePerUnit(b.pricePerUnit != null ? String(b.pricePerUnit) : '');
+    setHarvestDate(today); setUseBy(''); setQuantity('');
+  };
 
   // No "Meat": meat sold to cafés comes from an approved abattoir, so register the live animals instead
   const productTypes = ['Vegetable', 'Fruit', 'Dairy', 'Grain', 'Livestock'];
@@ -72,13 +86,16 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
     setError('');
     if (isCattle) return registerCattle();
     setLoading(true);
+    // v4.4: the batch ID is optional — one is made up for you if left blank
+    const id = batchId.trim() || generateBatchId();
+    if (!batchId.trim()) setBatchId(id);
 
     try {
       console.log('Creating batch (GASLESS)...');
 
       // GASLESS: Backend pays gas! The sign-in token says which farm this is.
       const response = await axios.post('https://farm-passport-backend-v3.onrender.com/api/farmer/create-batch', {
-        batchId,
+        batchId: id,
         productType,
         productName,
         quantity: Number(quantity),
@@ -89,12 +106,12 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
         season: season === 'auto' ? null : season,
         ...(isLivestock ? { species, animalRef, breed: breed || undefined, bornIn, rearedIn } : {})
       }, { headers: { Authorization: `Bearer ${farmerToken}` } });
-      if (response.data.originWarning) window.alert(response.data.originWarning);
+      if (response.data.originWarning) setWarn(response.data.originWarning);
 
       console.log('Batch created (gasless):', response.data);
 
       // Generate QR code
-      const qrUrl = await QRCode.toDataURL(batchLink(batchId), {
+      const qrUrl = await QRCode.toDataURL(batchLink(id), {
         width: 300,
         margin: 2,
         color: {
@@ -105,7 +122,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
 
       setQrCodeUrl(qrUrl);
       setCreatedBatch({
-        batchId,
+        batchId: id,
         productName,
         transactionHash: response.data.transactionHash
       });
@@ -179,10 +196,25 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
 
   return (
     <>
+      {warn && <p className="mb-3 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">⚠️ {warn}</p>}
+      {repeats.length > 0 && (
+        <div className="mb-4">
+          <p className="text-sm font-semibold text-gray-700 mb-1.5">⚡ Same as last time</p>
+          <div className="flex gap-2 flex-wrap">
+            {repeats.map(({ k, b }) => (
+              <button key={k} type="button" onClick={() => repeat(b)}
+                className={`text-sm px-3 py-1.5 rounded-full border transition ${productName === b.productName && unit === b.unit ? 'bg-green-600 text-white border-green-600' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}>
+                {b.productName}{b.pricePerUnit != null ? ` · £${Number(b.pricePerUnit).toFixed(2)}/${b.unit}` : ` · ${b.unit}`}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-gray-500 mt-1">Fills in the product, unit and price. Then just add the amount.</p>
+        </div>
+      )}
       <form onSubmit={handleSubmit} className="space-y-4">
         {!isCattle && <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
-            Batch ID *
+            Batch ID <span className="font-normal text-gray-400">(optional: we make one up if you leave it blank)</span>
           </label>
           <div className="flex gap-2">
             <input
@@ -191,7 +223,6 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
               onChange={(e) => setBatchId(e.target.value)}
               placeholder="e.g., VEG-20260129-ABC1"
               className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-              required
             />
             <button
               type="button"
@@ -202,7 +233,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
             </button>
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            Unique identifier for this batch
+            A batch is one lot of produce (e.g. this week's carrots). Its ID goes on the QR code and the blockchain record.
           </p>
         </div>}
 

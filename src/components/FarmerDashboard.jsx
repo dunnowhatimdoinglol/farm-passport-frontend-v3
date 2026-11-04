@@ -2,10 +2,11 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import CreateBatchForm from './CreateBatchForm';
 import { QRCodeSVG } from 'qrcode.react';
-import { FarmerOrders, DispatchForm, FarmerShipments, FarmerComingIn, FarmerHeldStock, WriteOffLog, FarmerMeatList } from './FarmerSupply';
+import { FarmerOrders, DispatchForm, FarmerShipments, FarmerComingIn, FarmerHeldStock, WriteOffLog, FarmerMeatList, MoneyPanel, AlertSettings, Checklist } from './FarmerSupply';
 import { formatQty, batchLink, API_BASE } from './walletHelpers';
 import NfcShare from './NfcShare';
 import { ChainHelp } from './ChainProof';
+import { useAsk } from './Ask';
 
 // farmerToken = sign-in token from FarmerPortal (the private key is never sent to the server)
 function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogout }) {
@@ -35,6 +36,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
 
   // Which batch is being recalled (hooks must all sit up here, before any early "return")
   const [recallBusy, setRecallBusy] = useState(null);
+  const [ask, askNode] = useAsk();       // v4.4: in-page dialogs instead of browser pop-ups
 
   // v4.2 — one section at a time: a "Today" to-do page, then tabs. The open tab is remembered for this browser tab.
   const [tab, setTabState] = useState(() => {
@@ -207,12 +209,12 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
 
   // Recall a batch (food safety): no more dispatches or sales; cafés holding it are warned
   const recallBatch = async (batchId, productName) => {
-    const reason = window.prompt(
-      `Recall ${productName} (${batchId})?\n\nThis is recorded on the blockchain. It stops any more dispatches and sales from this batch, ` +
-      `and every café holding it is warned.\n\nReason (shown to cafés and customers):`
-    );
-    if (reason === null) return;
-    if (!reason.trim()) { window.alert('Please give a reason for the recall.'); return; }
+    const reason = await ask({
+      title: `Recall ${productName}?`,
+      text: `Batch ${batchId}. This is recorded on the blockchain. It stops any more sending or selling from this batch, and every café holding it is warned.`,
+      input: { placeholder: 'Reason (shown to cafés and customers)', required: true }, confirmLabel: 'Recall this batch', danger: true,
+    });
+    if (reason === null || !reason.trim()) return;
     setRecallBusy(batchId);
     try {
       const res = await axios.post(
@@ -222,12 +224,12 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
       );
       const holders = res.data.holders || [];
       const also = res.data.alsoRecalled ? `\n\n${res.data.alsoRecalled} batch${res.data.alsoRecalled === 1 ? '' : 'es'} made from it (carcasses, cuts…) were recalled too.` : '';
-      window.alert((holders.length
-        ? `Recalled. These businesses are holding stock from this batch and have been warned in the app:\n\n• ${holders.join('\n• ')}\n\nPlease contact them directly too.`
-        : 'Recalled. Nobody is holding stock from this batch right now.') + also);
+      await ask({ okOnly: true, title: 'Recalled', text: (holders.length
+        ? `These businesses are holding stock from this batch and have been warned in the app:\n\n• ${holders.join('\n• ')}\n\nPlease contact them directly too.`
+        : 'Nobody is holding stock from this batch right now.') + also });
       refreshAll();
     } catch (err) {
-      window.alert(err.response?.data?.error || 'Could not recall the batch');
+      await ask({ okOnly: true, title: 'Couldn’t recall it', text: err.response?.data?.error || 'Could not recall the batch' });
     } finally {
       setRecallBusy(null);
     }
@@ -239,18 +241,21 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
     if (batch.dealPrice === null || batch.dealPrice === undefined) {
       const normal = batch.pricePerUnit;
       const suggested = normal != null ? (Math.round(normal * 0.7 * 100) / 100).toFixed(2) : '';
-      const raw = window.prompt(
-        `Reduced price per ${batch.unit} for ${batch.productName}${normal != null ? ` (normally £${Number(normal).toFixed(2)})` : ''}?\n\nCafés will see it under "Short-date deals".`, suggested);
+      const raw = await ask({
+        title: `Make ${batch.productName} a deal`,
+        text: `Reduced price per ${batch.unit}${normal != null ? ` (normally £${Number(normal).toFixed(2)}; 30% off is suggested)` : ''}. Cafés see it under "Short-date deals".`,
+        input: { value: suggested, placeholder: '£ per ' + batch.unit, numeric: true, required: true }, confirmLabel: 'Start the deal',
+      });
       if (raw === null || raw.trim() === '') return;
       price = Number(raw);
-      if (isNaN(price) || price < 0) { window.alert('Enter a price of 0 or more'); return; }
-    } else if (!window.confirm(`End the deal on ${batch.productName}? It goes back to the normal price.`)) return;
+      if (isNaN(price) || price < 0) { await ask({ okOnly: true, title: 'That price doesn’t work', text: 'Enter a price of 0 or more.' }); return; }
+    } else if (!(await ask({ title: `End the deal on ${batch.productName}?`, text: 'It goes back to the normal price.', confirmLabel: 'End the deal' }))) return;
     try {
       await axios.put(`https://farm-passport-backend-v3.onrender.com/api/farmer/batches/${encodeURIComponent(batch.batchId)}/deal`,
         { dealPrice: price }, { headers: { Authorization: `Bearer ${farmerToken}` } });
       refreshAll();
     } catch (err) {
-      window.alert(err.response?.data?.error || 'Could not save the deal');
+      await ask({ okOnly: true, title: 'Couldn’t save the deal', text: err.response?.data?.error || 'Could not save the deal' });
     }
   };
 
@@ -281,6 +286,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
 
   return (
     <div className="max-w-6xl mx-auto">
+      {askNode}
       
       {/* Email Verification Warning */}
       {!farmer.emailVerified && (
@@ -347,6 +353,17 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
       {/* Tabs */}
       <DashboardTabs tab={tab} setTab={setTab} approved={approved} counts={tabCounts(todo)} />
 
+      {(tab === 'today' || (tab === 'meat' && !approved)) && (
+        <div className="mb-4">
+          <Checklist storageKey={`fp_farm_checklist_${farmer.address}`} title="Getting started on Farm Passport" steps={[
+            { done: !!farmer.emailVerified, label: 'Verify your email', hint: 'Click the link we emailed you.' },
+            { done: approved, label: 'Get approved', hint: 'We check every farm before it goes live, usually within a day. You’ll get an email.' },
+            { done: batches.length > 0, label: 'Add your first batch', hint: 'What you’ve got, how much, and when it was harvested.', action: approved ? { label: 'Add a batch', onClick: () => { setTab('stock', 'all'); setShowCreateBatch(true); } } : null },
+            { done: batches.some(b => b.pricePerUnit != null), label: 'Give it a price', hint: 'Cafés only see a price if you set one. Use ✏️ Change on the batch.', action: { label: 'Go to your stock', onClick: () => setTab('stock', 'all') } },
+            { done: (todo?.orders || []).length > 0, label: 'Get your first order', hint: 'Tell your local cafés you’re on Farm Passport: they’ll find you under Order Stock.' },
+          ]} />
+        </div>
+      )}
       {(tab === 'today' || (tab === 'meat' && !approved)) && (
         <TodayPanel todo={todo} batches={batches} approved={approved} farmName={farmer.farmName} go={setTab}
           onCreate={() => { setTab('stock', 'all'); setShowCreateBatch(true); }} />
@@ -471,9 +488,11 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
 
       {/* How to check records on the blockchain */}
       <ChainHelp who="farm" className="mb-6" />
+      <AlertSettings token={farmerToken} className="mb-6" />
       </>)}
 
       {/* Orders from restaurants */}
+      {tab === 'orders' && <MoneyPanel orders={todo?.orders || []} />}
       {tab === 'orders' && <FarmerOrders farmerToken={farmerToken} approved={approved} refreshKey={refreshTrigger} onChanged={refreshAll} />}
 
       {/* Meat prices (what cafés can order) + cutting list (what they've pre-ordered) */}
@@ -539,6 +558,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
             onSuccess={handleBatchCreated}
             onCancel={() => setShowCreateBatch(false)}
             onSendToAbattoir={(ids) => { setPickedAnimals(Object.fromEntries(ids.map(id => [id, true]))); setSendMany(true); setDispatchBatchId(null); }}
+            recent={batches}
           />
         </div>
       )}

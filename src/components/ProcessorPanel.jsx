@@ -9,7 +9,10 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { API_BASE, EXPLORER, formatQty, metaMaskSign, walletSignIn, walletError } from './walletHelpers';
 import { TxLink, ChainHelp } from './ChainProof';
-import { ReturnCheck, FrozenChoice, frozenBody, Refs, RefInput } from './FarmerSupply';
+import { ReturnCheck, FrozenChoice, frozenBody, Refs, RefInput, AlertSettings } from './FarmerSupply';
+import { useAsk } from './Ask';
+import { printLabels } from './PrintDocs';
+import { batchLink } from './walletHelpers';
 
 const TEMPLATE = [
   'animal,head,kill_number,kill_date,cold_weight_kg,category,conformation,fat_class,status,notes',
@@ -91,6 +94,9 @@ export default function ProcessorPanel({ account, participants }) {
   const [message, setMessage] = useState(null);
   const [busy, setBusy] = useState(null);
   const auth = { headers: { Authorization: `Bearer ${token}` } };
+  // v4.4: one section at a time (remembered for this browser tab)
+  const [ptab, setPtabState] = useState(() => { try { return sessionStorage.getItem('fp_proc_tab') || 'animals'; } catch { return 'animals'; } });
+  const setPtab = (t) => { setPtabState(t); try { sessionStorage.setItem('fp_proc_tab', t); } catch { /* fine */ } };
 
   const load = async () => {
     try {
@@ -177,7 +183,22 @@ export default function ProcessorPanel({ account, participants }) {
           </p>
         )}
       </div>
-      <ChainHelp who="abattoir" />
+      {/* v4.4: tabs */}
+      <div className="sticky top-0 z-20 py-2 bg-gray-50/95 backdrop-blur">
+        <div className="flex gap-1 overflow-x-auto bg-white rounded-lg shadow p-1" role="tablist">
+          {[['animals', '🐄', 'Animals in', data.animalsComing.length],
+            ['kill', '📋', 'Kill sheet', data.animalsHere.length],
+            ['stock', '🥩', 'Carcasses & cuts', 0],
+            ['orders', '🧾', 'Café orders', ready],
+            ['settings', '⚙️', 'Settings', 0]].map(([k, icon, label, n]) => (
+            <button key={k} role="tab" aria-selected={ptab === k} onClick={() => setPtab(k)}
+              className={`shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-semibold whitespace-nowrap ${ptab === k ? 'bg-red-700 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+              <span>{icon}</span><span>{label}</span>
+              {n > 0 && <span className={`text-xs rounded-full px-1.5 min-w-[1.25rem] text-center ${ptab === k ? 'bg-white text-red-700' : 'bg-amber-400 text-amber-950'}`}>{n}</span>}
+            </button>
+          ))}
+        </div>
+      </div>
       {error && <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-red-700 text-sm font-semibold">⚠️ {error}</div>}
       {message && <div className="bg-green-50 border border-green-300 rounded-lg p-3 text-green-700 text-sm font-semibold">✅ {message}</div>}
 
@@ -188,10 +209,11 @@ export default function ProcessorPanel({ account, participants }) {
           {data.refusedComingBack.map(s => <ReturnCheck key={s.shipmentId} s={s} token={token} base="processor" onDone={load} />)}
         </div>
       )}
-      <AnimalsIn data={data} auth={auth} busy={busy} post={post} />
-      <KillSheet post={post} busy={busy} waiting={data.animalsHere} />
-      <MadeHere data={data} post={post} postMany={postMany} busy={busy} participants={participants} />
-      <OrdersToSend data={data} post={post} busy={busy} participants={participants} />
+      {ptab === 'animals' && <AnimalsIn data={data} auth={auth} busy={busy} post={post} />}
+      {ptab === 'kill' && <KillSheet post={post} busy={busy} waiting={data.animalsHere} />}
+      {ptab === 'stock' && <MadeHere data={data} post={post} postMany={postMany} busy={busy} participants={participants} />}
+      {ptab === 'orders' && <OrdersToSend data={data} post={post} busy={busy} participants={participants} />}
+      {ptab === 'settings' && <><AlertSettings token={token} /><ChainHelp who="abattoir" /></>}
     </div>
   );
 }
@@ -480,8 +502,10 @@ function MadeHere({ data, post, postMany, busy, participants }) {
     setSendOf(what === 'send' ? { batchId: b.batchId, to: '', quantity: String(b.remaining), via: '', notes: '' } : null);
   };
   const close = () => { setOpen(null); setSendOf(null); };
-  const recall = (b) => {
-    const reason = window.prompt(`Recall ${b.productName} (${b.batchId}) and everything made from it?\n\nReason:`);
+  const [ask, askNode] = useAsk();
+  const recall = async (b) => {
+    const reason = await ask({ title: `Recall ${b.productName}?`, text: `${b.batchId} and everything made from it. This is recorded on the blockchain and everyone holding it is warned.`,
+      input: { placeholder: 'Reason (shown to cafés and diners)', required: true }, confirmLabel: 'Recall', danger: true });
     if (reason && reason.trim()) post(`x${b.batchId}`, '/processor/recall', { batchId: b.batchId, reason: reason.trim() }, `${b.productName} recalled, with everything made from it`);
   };
 
@@ -558,6 +582,7 @@ function MadeHere({ data, post, postMany, busy, participants }) {
           <div className="flex gap-2 mt-2 items-center flex-wrap pl-6">
             <button onClick={() => openForm(b, 'send')} className="bg-green-600 text-white text-xs font-semibold px-2.5 py-1 rounded-lg hover:bg-green-700">🚚 Send</button>
             <button onClick={() => openForm(b, 'cut')} className="text-xs border border-gray-300 px-2.5 py-1 rounded-lg hover:bg-gray-50" title="e.g. turn steaks or trim into mince, burgers or cured meat">⚙️ Process further</button>
+            <button onClick={() => labels([b])} className="text-xs border border-gray-300 px-2.5 py-1 rounded-lg hover:bg-gray-50" title="Labels with a QR code to where it came from">🏷️ Labels{b.pieces ? ` (${b.pieces})` : ''}</button>
             <button onClick={() => recall(b)} className="text-xs text-gray-500 hover:text-red-700 hover:underline ml-auto">Recall…</button>
           </div>
         )}
@@ -565,6 +590,21 @@ function MadeHere({ data, post, postMany, busy, participants }) {
       </div>
     );
   };
+
+  // v4.4: printable labels with a QR code to the product's journey — one per piece/pack if the pieces are known
+  const [labelHint, setLabelHint] = useState(false);
+  const labelsFor = (list) => list.flatMap(b => {
+    const kill = (b.carcasses || []).map(id => byId[id]?.lotRef).filter(Boolean).join(', ') || (b.kind === 'Slaughter' ? b.lotRef : null);
+    const at = [data.me.approvalNumber, data.me.name && `(${data.me.name})`].filter(Boolean).join(' ') || null;
+    const n = b.pieces && b.pieces <= 60 ? b.pieces : 1;
+    const each = n > 1 ? Math.round((b.remaining / n) * 1000) / 1000 : b.remaining;
+    return Array.from({ length: n }, () => ({
+      productName: b.productName, quantity: each, unit: b.unit, useBy: b.useBy, batchId: b.batchId, farmName: b.farmName,
+      animalRef: b.animalRef, killNumber: kill, slaughteredAt: at, cutAt: b.kind !== 'Slaughter' ? at : null,
+      allergens: b.allergens || [], url: batchLink(b.batchId),
+    }));
+  });
+  const labels = (list) => setLabelHint(printLabels(labelsFor(list)) === false);
 
   const sendSelected = async () => {
     const calls = pickedList.map(b => ({
@@ -588,7 +628,9 @@ function MadeHere({ data, post, postMany, busy, participants }) {
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
       <div className="flex justify-between items-center mb-1 flex-wrap gap-2">
+        {askNode}
         <h3 className="text-lg font-bold text-gray-800">3. Carcasses & cuts</h3>
+        {labelHint && <p className="w-full text-xs text-red-600">Your browser blocked the print window: allow pop-ups for this site, then try 🏷️ Labels again.</p>}
         <div className="flex text-xs border border-gray-300 rounded-lg overflow-hidden">
           {[['now', 'Here now'], ['history', `📜 History (${all.length})`]].map(([k, label]) => (
             <button key={k} onClick={() => setView(k)} className={`px-3 py-1.5 ${view === k ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}>{label}</button>
@@ -670,6 +712,7 @@ function MadeHere({ data, post, postMany, busy, participants }) {
                 </p>
                 <div className="flex gap-2">
                   {!bulk && <button onClick={() => setBulk({ to: '', via: '', notes: '', qty: {} })} className="bg-green-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700">🚚 Send selected</button>}
+                  {!bulk && <button onClick={() => labels(pickedList)} className="text-sm border border-gray-300 px-3 py-1.5 rounded-lg hover:bg-gray-50">🏷️ Labels</button>}
                   <button onClick={() => { setPicked({}); setBulk(null); }} className="text-sm text-gray-600 hover:underline">Clear</button>
                 </div>
               </div>
@@ -1033,13 +1076,16 @@ function OrdersToSend({ data, post, busy, participants }) {
   const gbp = (v) => `£${Number(v).toFixed(2)}`;
   const sentLine = (o) => (o.quantitySent > 0 ? ` · ${formatQty(o.quantitySent, o.unit)} of ${formatQty(o.quantity, o.unit)} already sent` : '');
 
-  const closeRest = (o) => {
-    const note = window.prompt(`Close the remaining ${formatQty(o.outstanding, o.unit)} of ${o.productName} for ${o.restaurantName}?\n\nMessage to the café (e.g. no more to cut this week):`);
+  const [ask, askNode] = useAsk();
+  const closeRest = async (o) => {
+    const note = await ask({ title: `Close the remaining ${formatQty(o.outstanding, o.unit)} of ${o.productName}?`, text: `For ${o.restaurantName}. They'll see your message.`,
+      input: { placeholder: 'Message to the café, e.g. no more to cut this week' }, confirmLabel: 'Close the rest', danger: true });
     if (note !== null) post(`c${o.id}`, `/processor/orders/${o.id}/close-rest`, { note: note.trim() }, `Rest of the ${o.productName} order closed`);
   };
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
+      {askNode}
       <h3 className="text-lg font-bold text-gray-800 mb-1">4. Café orders to send</h3>
       <p className="text-sm text-gray-500 mb-3">Cafés order cuts from a farm's meat prices. When the cuts are here, send them straight to the café, all at once or part now and the rest later.</p>
       {data.orders.length === 0 && <p className="text-sm text-gray-500">No café orders for meat you're holding.</p>}

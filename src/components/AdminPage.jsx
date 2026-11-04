@@ -27,6 +27,8 @@ function AdminPage({ onBack }) {
   const [syncHash, setSyncHash] = useState('');
   const [approval, setApproval] = useState({});      // handler address → FSA approval number being typed
   const [newImpl,  setNewImpl]  = useState('');       // upgrade: new Traceability implementation address
+  const [contacts, setContacts] = useState({});       // v4.4: handler address → alert email (saved)
+  const [contactEdit, setContactEdit] = useState({}); // handler address → alert email being typed
 
   const auth = { headers: { Authorization: `Bearer ${token}` } };
 
@@ -38,6 +40,8 @@ function AdminPage({ onBack }) {
       ]);
       setData(o.data);
       setConfig(c.data);
+      axios.get(`${API_BASE}/admin/contacts`, auth)
+        .then(r => setContacts(Object.fromEntries((r.data.contacts || []).map(x => [x.address, x.email])))).catch(() => {});
     } catch (err) {
       setError(walletError(err));
     }
@@ -53,6 +57,21 @@ function AdminPage({ onBack }) {
       setToken(res.token);
     } catch (err) {
       setError(walletError(err));
+    }
+  };
+
+  // v4.4: the email an abattoir / depot gets alerts at (they sign in with a wallet, so we have no email otherwise)
+  const saveContact = async (p) => {
+    setBusy(`ce${p.address}`); setError(null); setMessage(null);
+    try {
+      const r = await axios.put(`${API_BASE}/admin/contacts`, { address: p.address, email: (contactEdit[p.address] ?? '').trim(), name: p.name }, auth);
+      setContacts({ ...contacts, [p.address.toLowerCase()]: r.data.email });
+      setContactEdit({ ...contactEdit, [p.address]: undefined });
+      setMessage(r.data.email ? `${p.name} will get alerts at ${r.data.email}` : `${p.name}'s alert email removed`);
+    } catch (err) {
+      setError(walletError(err));
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -298,6 +317,17 @@ function AdminPage({ onBack }) {
                 <p className="font-semibold text-gray-800">{p.name} {!p.active && <span className="text-xs text-red-600">(revoked)</span>}</p>
                 <p className="text-xs text-gray-500">Extra steps: {(p.stages || []).join(', ') || 'none (Arrived / Out for delivery only)'}</p>
                 <p className="font-mono text-xs text-gray-400">{p.address}</p>
+                {p.active && (contactEdit[p.address] === undefined ? (
+                  <p className="text-xs text-gray-600 mt-1">🔔 Alerts: {contacts[p.address.toLowerCase()] || <span className="text-gray-400">no email</span>}{' '}
+                    <button onClick={() => setContactEdit({ ...contactEdit, [p.address]: contacts[p.address.toLowerCase()] || '' })} className="text-blue-600 underline ml-1">{contacts[p.address.toLowerCase()] ? 'change' : 'add'}</button></p>
+                ) : (
+                  <div className="flex gap-2 items-center mt-1 flex-wrap">
+                    <input type="email" value={contactEdit[p.address]} onChange={(e) => setContactEdit({ ...contactEdit, [p.address]: e.target.value })}
+                      placeholder="Alert email, e.g. office@abattoir.co.uk" className="px-2 py-1 border border-gray-300 rounded text-xs w-64" />
+                    <Btn id={`ce${p.address}`} kind="grey" onClick={() => saveContact(p)}>Save</Btn>
+                    <button onClick={() => setContactEdit({ ...contactEdit, [p.address]: undefined })} className="text-xs text-gray-500 underline">cancel</button>
+                  </div>
+                ))}
                 {data.processingAddress && p.active && (
                   p.processor?.active ? (
                     <p className="text-xs text-red-800 font-semibold mt-1">

@@ -1,9 +1,11 @@
 // Farmer dashboard sections for the supply chain: orders, dispatching, shipments
 import { useState, useEffect } from 'react';
 import axios from 'axios';
-import { API_BASE, EXPLORER, formatQty, shortWhen } from './walletHelpers';
+import { API_BASE, EXPLORER, formatQty, shortWhen, batchLink } from './walletHelpers';
+import { printDeliveryNote, printInvoice } from './PrintDocs';
 import { DeliveryPhotoButton } from './DeliveryPhoto';
 import { TxLink } from './ChainProof';
+import { useAsk } from './Ask';
 
 // Money helpers — prices are only ever shown to the farm and the restaurant
 export const gbp = (v) => (v === null || v === undefined || v === '' || isNaN(Number(v)))
@@ -29,6 +31,25 @@ export function RefInput({ value, onChange, placeholder = 'Your ref (optional), 
       className={`px-3 py-2 border border-gray-300 rounded-lg text-sm ${className}`} />
   );
 }
+// v4.4 — a small ⓘ that explains a word in plain English (tap or hover)
+export function Tip({ children, className = '' }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className={`relative inline-block align-middle ${className}`}>
+      <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(!open); }} onBlur={() => setOpen(false)}
+        className="w-4 h-4 rounded-full bg-gray-200 text-gray-600 text-[10px] font-bold leading-4 text-center hover:bg-gray-300" aria-label="What does this mean?">i</button>
+      {open && <span className="absolute z-30 left-1/2 -translate-x-1/2 top-5 w-64 text-xs font-normal normal-case tracking-normal text-left text-gray-800 bg-white border border-gray-200 rounded-lg shadow-lg p-2.5">{children}</span>}
+    </span>
+  );
+}
+export const TIPS = {
+  fingerprint: 'The agreed price and amounts are turned into a unique code (a “fingerprint”) that goes on the blockchain. The prices themselves stay private, but if anyone changed them later the code wouldn’t match.',
+  fci: 'Food Chain Information: the legal declarations you make about the animals’ health and medicines before slaughter. Only you and the abattoir can read it; just its fingerprint goes on the blockchain.',
+  batch: 'A batch is one lot of produce or one group of animals, e.g. this week’s carrots. Each has its own QR code and record.',
+  blockchain: 'A public record that can’t be changed or deleted. Farm Passport writes each step there for you and pays the fee.',
+  held: 'What’s still to send on open orders is kept aside, so no other café can order the same stock. Closing or cancelling the rest frees it.',
+};
+
 // "£17.00 owed (2 kg refused, not charged)" — the café only pays for what it accepted
 export function OwedLine({ o }) {
   if (o.owed === null || o.owed === undefined || o.total === null || o.total === undefined) return null;
@@ -54,8 +75,8 @@ const STATUS_BADGE = {
   delivered:  'bg-green-100 text-green-700',
 };
 const STATUS_LABEL = {
-  requested: 'New request', part_sent: 'Part sent', closed_short: 'Part sent · rest closed', dispatched: 'Dispatched', declined: 'Declined', cancelled: 'Cancelled',
-  in_transit: 'In transit', delivered: 'Delivered',
+  requested: 'New order', part_sent: 'Part sent', closed_short: 'Part sent · rest closed', dispatched: 'Sent', declined: 'Declined', cancelled: 'Cancelled',
+  in_transit: 'On its way', delivered: 'Delivered',
 };
 
 // The order's terms are fingerprinted on the blockchain at dispatch; the café confirms them on delivery.
@@ -75,8 +96,9 @@ export function TermsCheck({ order, token }) {
   return (
     <p className="text-xs mt-1 flex flex-wrap gap-x-2 items-center">
       <span className={order.termsAccepted ? 'text-green-700' : 'text-gray-500'}>
-        🔏 {order.termsAccepted ? 'Terms confirmed by both sides' : order.shipmentStatus === 'delivered' ? 'Delivered without confirming terms' : 'Terms fingerprinted on-chain'}
+        🔏 {order.termsAccepted ? 'Price agreed by both sides' : order.shipmentStatus === 'delivered' ? 'Delivered, price not confirmed by the café' : 'Price recorded, waiting for the café to confirm'}
       </span>
+      <Tip>{TIPS.fingerprint}</Tip>
       {result === null && <button onClick={verify} className="text-blue-600 hover:underline">Verify</button>}
       {result === 'loading' && <span className="text-gray-400">checking…</span>}
       {result?.matches === true && <span className="text-green-700 font-semibold">✅ matches the blockchain</span>}
@@ -100,7 +122,7 @@ export function FciFields({ value, onChange, disabled }) {
   const set = (k, v) => onChange({ ...value, [k]: v });
   return (
     <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-2">
-      <p className="text-sm font-semibold text-amber-900">📋 Food Chain Information <span className="text-red-600">*</span> <span className="font-normal text-amber-800">(required for slaughter)</span></p>
+      <p className="text-sm font-semibold text-amber-900">📋 Food Chain Information <span className="text-red-600">*</span> <span className="font-normal text-amber-800">(required for slaughter)</span> <Tip>{TIPS.fci}</Tip></p>
       {FCI_QUESTIONS.map(([k, label]) => (
         <label key={k} className="flex gap-2 items-start text-sm text-gray-800 cursor-pointer">
           <input type="checkbox" className="mt-1" checked={!!value[k]} disabled={disabled} onChange={(e) => set(k, e.target.checked)} />
@@ -211,6 +233,124 @@ export function DeliveryResults({ o, token, onResolve, busy }) {
   );
 }
 
+// v4.4 — email alert settings (farm, café, abattoir): instant alerts and the morning "Today" email
+export function AlertSettings({ token, className = '' }) {
+  const [p, setP] = useState(null);
+  const [saved, setSaved] = useState(false);
+  const auth = { headers: { Authorization: `Bearer ${token}` } };
+  useEffect(() => { axios.get(`${API_BASE}/alerts/prefs`, auth).then(r => setP(r.data)).catch(() => setP({ error: true })); }, [token]);
+  const save = async (next) => {
+    setP({ ...p, ...next }); setSaved(false);
+    try { await axios.put(`${API_BASE}/alerts/prefs`, { instant: next.instant ?? p.instant, daily: next.daily ?? p.daily }, auth); setSaved(true); }
+    catch (_) { setP(p); }
+  };
+  if (!p || p.error) return null;
+  return (
+    <div className={`bg-white rounded-lg shadow-lg p-6 ${className}`}>
+      <h3 className="text-lg font-bold text-gray-800">🔔 Email alerts</h3>
+      {p.email ? <p className="text-sm text-gray-500 mb-3">Sent to <strong>{p.email}</strong></p>
+        : <p className="text-sm text-amber-800 mb-3">No email on file yet. Ask Farm Passport to add one so you get alerts.</p>}
+      <label className="flex items-start gap-3 py-2 cursor-pointer">
+        <input type="checkbox" className="mt-1 w-4 h-4" checked={p.instant} onChange={(e) => save({ instant: e.target.checked })} />
+        <span><span className="font-semibold text-gray-800">As things happen</span><span className="block text-sm text-gray-500">New orders, deliveries on their way, refused goods, approvals.</span></span>
+      </label>
+      <label className="flex items-start gap-3 py-2 cursor-pointer">
+        <input type="checkbox" className="mt-1 w-4 h-4" checked={p.daily} onChange={(e) => save({ daily: e.target.checked })} />
+        <span><span className="font-semibold text-gray-800">Morning summary</span><span className="block text-sm text-gray-500">One email first thing with what needs doing today. Only sent when there's something to do.</span></span>
+      </label>
+      {saved && <p className="text-xs text-green-700">✓ Saved</p>}
+    </div>
+  );
+}
+
+// v4.4 — a getting-started checklist. Hides itself when everything's done (or when dismissed on this device).
+export function Checklist({ title = 'Getting started', steps, storageKey }) {
+  const [hidden, setHidden] = useState(() => { try { return localStorage.getItem(storageKey) === '1'; } catch { return false; } });
+  const done = steps.filter(x => x.done).length;
+  if (hidden || done === steps.length) return null;
+  const next = steps.find(x => !x.done);
+  return (
+    <div className="bg-white rounded-lg shadow-lg p-6 border-2 border-green-200">
+      <div className="flex justify-between items-start gap-3">
+        <div>
+          <h3 className="text-lg font-bold text-gray-800">🚀 {title}</h3>
+          <p className="text-sm text-gray-500">{done} of {steps.length} done</p>
+        </div>
+        <button onClick={() => { setHidden(true); try { localStorage.setItem(storageKey, '1'); } catch { /* fine */ } }} className="text-xs text-gray-400 hover:text-gray-600">Hide</button>
+      </div>
+      <div className="h-1.5 bg-gray-100 rounded-full my-3 overflow-hidden"><div className="h-full bg-green-600 rounded-full transition-all" style={{ width: `${(done / steps.length) * 100}%` }} /></div>
+      <ol className="space-y-2">
+        {steps.map((x, i) => (
+          <li key={i} className={`flex gap-3 items-start ${x.done ? 'text-gray-400' : 'text-gray-800'}`}>
+            <span className={`w-6 h-6 shrink-0 rounded-full flex items-center justify-center text-xs font-bold ${x.done ? 'bg-green-100 text-green-700' : x === next ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-500'}`}>{x.done ? '✓' : i + 1}</span>
+            <span className="flex-1">
+              <span className={x.done ? 'line-through' : 'font-semibold'}>{x.label}</span>
+              {!x.done && x.hint && <span className="block text-sm text-gray-500">{x.hint}</span>}
+              {!x.done && x === next && x.action && <button onClick={x.action.onClick} className="mt-1 text-sm font-semibold text-green-700 hover:underline">{x.action.label} →</button>}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+// v4.4 — print the paperwork for an order: a delivery note for the driver, and an invoice for what's owed
+export function PrintButtons({ o, className = '' }) {
+  const [blocked, setBlocked] = useState(false);
+  const ds = (o.dispatches || []).filter(d => d.status && d.status !== 'cancelled');
+  if (!ds.length) return null;
+  const order = { orderRef: o.orderRef, poNumber: o.poNumber, productName: o.productName, unit: o.unit, quantity: o.quantity, owed: o.owed, total: o.total, paymentStatus: o.paymentStatus };
+  const go = (ok) => setBlocked(ok === false);
+  return (
+    <span className={`inline-flex gap-3 items-center text-xs ${className}`}>
+      <button type="button" onClick={() => go(printDeliveryNote({ from: o.sentByName || o.farmName, to: o.restaurantName, order, deliveries: ds, journeyUrl: batchLink(ds[0].batchId) }))}
+        className="text-gray-700 hover:underline">🖨️ Delivery note</button>
+      {(o.total != null || o.owed != null) && (
+        <button type="button" onClick={() => go(printInvoice({ seller: o.farmName, buyer: o.restaurantName, order, deliveries: ds }))} className="text-gray-700 hover:underline">🧾 Invoice</button>
+      )}
+      {blocked && <span className="text-red-600">Allow pop-ups for this site to print</span>}
+    </span>
+  );
+}
+
+// v4.4 — money at a glance: owed to the farm (sent, not marked paid), by café, and what's been paid this month
+export function MoneyPanel({ orders }) {
+  const sent = orders.filter(o => ['dispatched', 'part_sent', 'closed_short'].includes(o.status));
+  const amount = (o) => Number(o.owed ?? o.total ?? 0);
+  const unpaid = sent.filter(o => o.paymentStatus !== 'paid' && amount(o) > 0);
+  const since = new Date(); since.setDate(1); since.setHours(0, 0, 0, 0);
+  const paidMonth = sent.filter(o => o.paymentStatus === 'paid' && new Date(o.updatedAt || o.createdAt) >= since);
+  const byCafe = Object.values(unpaid.reduce((m, o) => {
+    const c = m[o.restaurantName] || (m[o.restaurantName] = { name: o.restaurantName, owed: 0, n: 0, oldest: o.createdAt });
+    c.owed = Math.round((c.owed + amount(o)) * 100) / 100; c.n++; if (new Date(o.createdAt) < new Date(c.oldest)) c.oldest = o.createdAt;
+    return m;
+  }, {})).sort((a, b) => b.owed - a.owed);
+  const total = Math.round(unpaid.reduce((n, o) => n + amount(o), 0) * 100) / 100;
+  const paid = Math.round(paidMonth.reduce((n, o) => n + amount(o), 0) * 100) / 100;
+  if (!sent.length) return null;
+  return (
+    <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+      <h3 className="text-xl font-bold text-gray-800 mb-3">💷 Money</h3>
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3"><p className="text-xs text-amber-900">Owed to you</p><p className="text-2xl font-bold text-gray-900">{gbp(total) || '£0.00'}</p><p className="text-xs text-gray-600">{unpaid.length} order{unpaid.length === 1 ? '' : 's'} not marked paid</p></div>
+        <div className="bg-green-50 border border-green-200 rounded-lg p-3"><p className="text-xs text-green-900">Paid this month</p><p className="text-2xl font-bold text-gray-900">{gbp(paid) || '£0.00'}</p><p className="text-xs text-gray-600">{paidMonth.length} order{paidMonth.length === 1 ? '' : 's'}</p></div>
+      </div>
+      {byCafe.length > 0 && (
+        <div className="divide-y divide-gray-100 text-sm">
+          {byCafe.map(c => (
+            <div key={c.name} className="py-1.5 flex justify-between gap-3">
+              <span>{c.name} <span className="text-gray-500">· {c.n} order{c.n === 1 ? '' : 's'} · oldest {new Date(c.oldest).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span></span>
+              <span className="font-semibold">{gbp(c.owed)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="text-xs text-gray-500 mt-2">Cafés pay you directly for now. Tick <strong>Paid</strong> on an order when the money arrives. Amounts only count what each café accepted.</p>
+    </div>
+  );
+}
+
 // Goods refused at the door come back to whoever sent them. Nothing goes back into stock until they're checked:
 // some (or all) back in stock, the rest written off with a reason. Both are recorded on the blockchain.
 export function ReturnCheck({ s, token, base = 'farmer', onDone }) {
@@ -296,6 +436,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
   const [rest,    setRest]    = useState({});     // orderId → { close, note } when sending only part
   const [frz,     setFrz]     = useState({});     // orderId → { on, date } — meat sent frozen
   const [myRef,   setMyRef]   = useState({});     // orderId → the farm's own reference (invoice / delivery note no.)
+  const [more,    setMore]    = useState({});     // orderId → showing "More options" (batches, prices, delivery, ref) — v4.4
   const [carriers, setCarriers] = useState([]);   // registered depots / couriers
   const auth = { headers: { Authorization: `Bearer ${farmerToken}` } };
 
@@ -335,9 +476,12 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
   const open = orders.filter(o => o.open ?? o.status === 'requested');
   const done = orders.filter(o => !(o.open ?? o.status === 'requested')).slice(0, 20);
   // Decline a new order, or close what's left of a part-sent one
-  const closeOrDecline = (o) => {
+  const [ask, askNode] = useAsk();
+  const closeOrDecline = async (o) => {
     const part = o.status === 'part_sent';
-    const note = window.prompt(part ? `Close the remaining ${formatQty(o.outstanding, o.unit)}? Message to the café (e.g. out of stock):` : 'Reason for declining (optional):') ?? null;
+    const note = await ask(part
+      ? { title: `Close the remaining ${formatQty(o.outstanding, o.unit)}?`, text: `${o.restaurantName} will see your message. What's already been sent stays.`, input: { placeholder: 'Message to the café, e.g. sorry, out of stock until next week' }, confirmLabel: 'Close the rest', danger: true }
+      : { title: `Decline ${o.restaurantName}'s order?`, text: `${formatQty(o.quantity, o.unit)} ${o.productName}. They'll get an email.`, input: { placeholder: 'Reason (optional), e.g. none left this week' }, confirmLabel: 'Decline order', danger: true });
     if (note !== null) act(o, 'decline', { note });
   };
   const resolve = (o) => (d, resolution) => act(o, 'missing', { shipmentId: d.shipmentId, resolution });
@@ -345,9 +489,10 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+      {askNode}
       <h3 className="text-xl font-bold text-gray-800 mb-1">🧾 Orders {open.length > 0 && <span className="text-sm bg-yellow-400 text-yellow-900 rounded-full px-2 py-0.5 ml-1">{open.length} new</span>}</h3>
-      <p className="text-sm text-gray-500 mb-4">Restaurants order your products. Dispatching records the shipment on the blockchain. Meat orders are sent by whoever holds the cuts.
-        Stock stays in your batches until you send it, but what's still to send on open orders is <strong>held</strong> for them, so no other café can order it. Closing the rest frees it again.</p>
+      <p className="text-sm text-gray-500 mb-4">Cafés order from you here. Sending an order records it on the blockchain <Tip>{TIPS.blockchain}</Tip>. Meat orders are sent by whoever holds the cuts (you or the abattoir).
+        Stock still to send on open orders is <strong>held</strong> for them <Tip>{TIPS.held}</Tip>.</p>
 
       {error && <p className="text-sm text-red-600 mb-3">⚠️ {error}</p>}
 
@@ -377,6 +522,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                       {o.frozen && <span className="ml-1 text-xs font-semibold bg-sky-100 text-sky-800 px-1.5 py-0.5 rounded">❄️ frozen please</span>}</p>
                     <SentSoFar o={o} />
                     <DeliveryResults o={o} token={farmerToken} onResolve={resolve(o)} busy={busyId === o.id} />
+                    <PrintButtons o={o} className="mt-1" />
                     {o.neededUntil && <p className="text-xs text-gray-600">Needed by {day(o.neededUntil)}</p>}
                     {o.note && <p className="text-sm text-gray-600 italic mt-1">"{o.note}"</p>}
                     {o.unitPrice != null && <p className="text-xs text-gray-700 mt-1">💷 {gbp(o.unitPrice)}/{o.unit} from your meat prices ≈ {gbp(o.unitPrice * o.quantity)}</p>}
@@ -402,9 +548,16 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                       </div>
                     ))}
                     <RestChoice left={o.outstanding} sending={sendQty} unit={o.unit} value={rest[o.id]} onChange={(v) => setRest({ ...rest, [o.id]: v })} />
+                    {/* v4.4: frozen shows when the café asked for it; courier, delivery charge and ref sit under "More options" */}
+                    {(o.frozen || more[o.id]) && <div className="mt-2"><FrozenChoice value={frz[o.id]} wanted={o.frozen} disabled={busyId === o.id} onChange={(v) => setFrz({ ...frz, [o.id]: v })} /></div>}
+                    {!more[o.id] && (
+                      <button type="button" onClick={() => setMore({ ...more, [o.id]: true })} className="mt-2 block text-xs text-gray-600 underline underline-offset-2 hover:text-gray-900">
+                        More options: {o.frozen ? '' : 'send frozen, '}delivery charge, courier, your ref ▾</button>
+                    )}
+                    {more[o.id] && (<>
                     <div className="mt-2 flex flex-wrap gap-3 items-center">
-                      <FrozenChoice value={frz[o.id]} wanted={o.frozen} disabled={busyId === o.id} onChange={(v) => setFrz({ ...frz, [o.id]: v })} />
                       <RefInput value={myRef[o.id]} onChange={(v) => setMyRef({ ...myRef, [o.id]: v })} disabled={busyId === o.id} className="flex-1 min-w-[12rem]" />
+                      <button type="button" onClick={() => setMore({ ...more, [o.id]: false })} className="text-xs text-gray-500 hover:underline">Fewer options ▴</button>
                     </div>
                     <div className="flex gap-2 mt-2 flex-wrap items-center text-sm">
                       <select value={via[o.id] || ''} onChange={(e) => setVia({ ...via, [o.id]: e.target.value })} disabled={busyId === o.id}
@@ -415,10 +568,11 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                       <label className="text-gray-600 ml-2">🚚 Delivery £</label>
                       <input type="number" step="0.01" min="0" value={fee[o.id] ?? ''} onChange={(e) => setFee({ ...fee, [o.id]: e.target.value })}
                         placeholder="0.00" className="w-24 px-3 py-2 border border-gray-300 rounded-lg" disabled={busyId === o.id} />
-                      <span className="ml-2 font-semibold text-gray-800">
-                        {formatQty(sendQty, o.unit)} · {total != null ? <>Total {gbp(total)}</> : <span className="text-gray-400 font-normal">set prices to see the total</span>}
-                      </span>
                     </div>
+                    </>)}
+                    <p className="mt-2 text-sm font-semibold text-gray-800">
+                      {formatQty(sendQty, o.unit)} · {total != null ? <>Total {gbp(total)}</> : <span className="text-gray-400 font-normal">set prices to see the total</span>}
+                    </p>
                     <button
                       onClick={() => act(o, 'dispatch', {
                         allocations: plan.map(a => ({ shipmentId: a.shipmentId, quantity: toNum(a.quantity), unitPrice: toNum(a.unitPrice) ?? undefined })),
@@ -427,7 +581,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                       })}
                       disabled={busyId === o.id || !approved || !plan.length || !(sendQty > 0)}
                       className="mt-2 bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
-                      {busyId === o.id ? '⛓️ Recording…' : `🚚 Send ${formatQty(sendQty, o.unit)} to ${o.restaurantName}`}
+                      {busyId === o.id ? '⛓️ Recording… (about 5 sec)' : `🚚 Send ${formatQty(sendQty, o.unit)} to ${o.restaurantName}`}
                     </button>
                   </div>
                 )}
@@ -468,14 +622,31 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                   </p>
                   <SentSoFar o={o} />
                   <DeliveryResults o={o} token={farmerToken} onResolve={resolve(o)} busy={busyId === o.id} />
+                    <PrintButtons o={o} className="mt-1" />
                   {o.neededUntil && <p className="text-xs text-gray-600">Needs to last until {day(o.neededUntil)}</p>}
                   {o.note && <p className="text-sm text-gray-600 italic mt-1">"{o.note}"</p>}
                 </div>
                 <Badge status={o.status} />
               </div>
 
+              {/* v4.4: a one-line summary; the batches, prices, delivery and ref only when "More options" is open */}
+              {!more[o.id] && (
+                <div className="mt-3 bg-white border border-yellow-200 rounded-lg p-3 text-sm">
+                  {plan.length === 0 ? <p className="text-red-600">Nothing left that matches this order.</p> : (
+                    <p className="text-gray-800">Send <strong>{formatQty(Math.round(sendQty * 1000) / 1000, o.unit)}</strong>
+                      {plan.length === 1 ? <> from your batch with the soonest use-by ({day(plan[0].useBy)})</> : <> from {plan.length} batches, soonest use-by first</>}
+                      {priced && plan.length ? <> at {[...new Set(plan.map(a => gbp(toNum(a.unitPrice))))].join(' / ')}/{o.unit}</> : null}
+                      {total != null ? <> · <strong>{gbp(total)}</strong></> : <span className="text-gray-400"> · no price set</span>}</p>
+                  )}
+                  {o.suggestion?.shortBy > 0 && <p className="text-xs text-amber-700 mt-1">⚠️ You're {formatQty(o.suggestion.shortBy, o.unit)} short. Send what you have now, then keep the rest open or close it.</p>}
+                  <button type="button" onClick={() => setMore({ ...more, [o.id]: true })} className="mt-1 text-xs text-gray-600 underline underline-offset-2 hover:text-gray-900">
+                    More options: change amounts or prices, delivery charge, courier, your ref ▾</button>
+                </div>
+              )}
+              {more[o.id] && (<>
               <div className="mt-3 bg-white border border-yellow-200 rounded-lg p-3">
-                <p className="text-xs font-semibold text-gray-700 mb-2">Send from (soonest use-by first):</p>
+                <div className="flex justify-between items-center mb-2"><p className="text-xs font-semibold text-gray-700">Send from (soonest use-by first):</p>
+                  <button type="button" onClick={() => setMore({ ...more, [o.id]: false })} className="text-xs text-gray-500 hover:underline">Fewer options ▴</button></div>
                 {plan.length === 0 && <p className="text-sm text-red-600">Nothing left that matches this order.</p>}
                 {plan.map((a, i) => (
                   <div key={a.batchId} className="flex gap-2 items-center flex-wrap text-sm mb-1">
@@ -511,6 +682,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                   {formatQty(Math.round(sendQty * 1000) / 1000, o.unit)} · {total != null ? <>Total {gbp(total)}</> : <span className="text-gray-400 font-normal">set prices to see the total</span>}
                 </span>
               </div>
+              </>)}
               <RestChoice left={o.outstanding ?? o.quantity} sending={Math.round(sendQty * 1000) / 1000} unit={o.unit} value={rest[o.id]} onChange={(v) => setRest({ ...rest, [o.id]: v })} />
               <div className="flex gap-2 mt-3 flex-wrap items-center">
                 <button
@@ -524,7 +696,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                   disabled={busyId === o.id || !approved || !plan.length || !(sendQty > 0)}
                   className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400"
                 >
-                  {busyId === o.id ? '⛓️ Recording…' : sendQty > 0 && sendQty < (o.outstanding ?? o.quantity) ? `🚚 Send ${formatQty(Math.round(sendQty * 1000) / 1000, o.unit)} now` : '🚚 Dispatch'}
+                  {busyId === o.id ? '⛓️ Recording… (about 5 sec)' : sendQty > 0 && sendQty < (o.outstanding ?? o.quantity) ? `🚚 Send ${formatQty(Math.round(sendQty * 1000) / 1000, o.unit)} now` : `🚚 Send ${formatQty(Math.round(sendQty * 1000) / 1000, o.unit)} to ${o.restaurantName}`}
                 </button>
                 <button
                   onClick={() => closeOrDecline(o)}
@@ -551,6 +723,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                   {o.dispatches?.length ? o.dispatches.map(d => d.batchId).join(' + ') : `${o.batchId || ''}${o.shipmentId ? ` · shipment #${o.shipmentId}` : ''}`}
                 </p>
                 <DeliveryResults o={o} token={farmerToken} onResolve={resolve(o)} busy={busyId === o.id} />
+                <PrintButtons o={o} className="mt-1" />
                 {o.total != null && (
                   <p className="text-xs text-gray-700 mt-1">
                     💷 {o.unitPrice != null && <>{gbp(o.unitPrice)}/{o.unit}</>}
@@ -828,8 +1001,9 @@ export function FarmerShipments({ farmerToken, refreshKey = 0, onChanged }) {
     .catch(() => setError('Could not load shipments'));
   useEffect(() => { load(); }, [refreshKey]);
 
+  const [ask, askNode] = useAsk();
   const cancel = async (s) => {
-    if (!window.confirm(`Cancel shipment #${s.shipmentId}? The ${formatQty(s.quantitySent, s.unit)} goes back to your farm stock.`)) return;
+    if (!(await ask({ title: `Cancel delivery #${s.shipmentId}?`, text: `The ${formatQty(s.quantitySent, s.unit)} ${s.productName} goes back into your stock.`, confirmLabel: 'Cancel delivery', cancelLabel: 'Keep it', danger: true }))) return;
     setBusyId(s.shipmentId);
     setError(null);
     try {
@@ -848,6 +1022,7 @@ export function FarmerShipments({ farmerToken, refreshKey = 0, onChanged }) {
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+      {askNode}
       <h3 className="text-xl font-bold text-gray-800 mb-4">🚚 Shipments sent</h3>
       {error && <p className="text-sm text-red-600 mb-3">⚠️ {error}</p>}
       {comingBack.length > 0 && (

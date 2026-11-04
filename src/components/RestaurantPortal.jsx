@@ -7,7 +7,8 @@ import { AUTH_EVENT, announceAuth, clearCustomerSession } from '../authSession';
 import { shortWhen, receiptLink } from './walletHelpers';
 import NfcShare from './NfcShare';
 import { PhotoPicker, DeliveryPhotoButton } from './DeliveryPhoto';
-import { TermsCheck, Refs, OwedLine } from './FarmerSupply';
+import { TermsCheck, Refs, OwedLine, AlertSettings, Checklist } from './FarmerSupply';
+import { printQrSlip } from './PrintDocs';
 import { TxLink, ChainHelp } from './ChainProof';
 
 // Prices are only shown to the farm and the restaurant — never on the customer journey
@@ -133,6 +134,7 @@ function RestaurantPortal({ onBack, startOn = null }) {
 function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBack }) {
   // ── Which tab is showing ──
   const [tab, setTab] = useState('create');   // 'create' | 'order' | 'deliveries' | 'history'
+  const [showAlerts, setShowAlerts] = useState(false);   // v4.4: email alert settings
 
   // ── Email verification + approval (checked live from the backend) ──
   const [emailVerified,  setEmailVerified]  = useState(restaurantUser.emailVerified ?? null);
@@ -298,12 +300,18 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
           <h2 className="text-xl font-bold text-gray-800">🍽️ {restaurantUser.restaurantName}</h2>
           <p className="text-sm text-gray-500">{restaurantUser.email}</p>
         </div>
-        <button
-          onClick={onLogout}
-          className="text-sm text-gray-500 hover:text-gray-700 font-semibold border border-gray-300 px-3 py-1.5 rounded-lg hover:bg-gray-50 transition"
-        >
-          Logout
-        </button>
+        <div className="flex gap-2">
+          {approved && (
+            <button onClick={() => setShowAlerts(!showAlerts)} aria-expanded={showAlerts}
+              className="text-sm text-gray-600 hover:text-gray-800 font-semibold border border-gray-300 px-3 py-1.5 rounded-lg hover:bg-gray-50 transition">🔔 Alerts</button>
+          )}
+          <button
+            onClick={onLogout}
+            className="text-sm text-gray-500 hover:text-gray-700 font-semibold border border-gray-300 px-3 py-1.5 rounded-lg hover:bg-gray-50 transition"
+          >
+            Logout
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -377,7 +385,9 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
   const shell = (children) => (
     <div className="max-w-4xl mx-auto space-y-6">
       <Header />
+      {showAlerts && <AlertSettings token={restaurantToken} />}
       <Banners />
+      <CafeChecklist authHeader={authHeader} emailVerified={emailVerified} approved={approved} restaurantUser={restaurantUser} go={(t) => { setTab(t); if (t === 'create') { fetchStock(); fetchDishes(); } }} />
       <Tabs />
       {children}
       <div className="text-center">
@@ -426,10 +436,10 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
           {r.farms?.length > 1 && <p className="text-xs text-green-800 mt-2">🎖️ The customer can collect {r.farms.length} farm badges from this one receipt.</p>}
         </div>
 
-        <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-4 text-center">
-          <p className="text-yellow-800 text-sm">
-            🖨️ <strong>Tip:</strong> Right-click the QR code → Save image, then print it onto the customer's receipt.
-          </p>
+        <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-4 text-center space-y-2">
+          <button onClick={() => printQrSlip({ title: restaurantUser.restaurantName, subtitle: 'Scan to see where your meal came from and collect a farm badge', url: receiptLink(r.receiptId) })}
+            className="bg-gray-800 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-gray-900">🖨️ Print the QR slip</button>
+          <p className="text-yellow-800 text-xs">Hand it over with the bill, or show this screen for the customer to scan.</p>
         </div>
 
         <div className="flex gap-3 justify-center">
@@ -681,12 +691,36 @@ function OrderStock({ authHeader, approved }) {
     }
   };
 
-  const editPo = async (o) => {
-    const v = window.prompt(`Your PO number for ${o.orderRef || 'this order'}:`, o.poNumber || '');
-    if (v === null) return;
-    try { await axios.put(`${API_BASE}/restaurant/orders/${o.id}/ref`, { poNumber: v.trim() }, authHeader); load(); }
+  // v4.4: small forms on the page instead of browser pop-ups
+  const [poEdit, setPoEdit] = useState(null);       // { id, value }
+  const [asking, setAsking] = useState(null);       // { id, kind: 'cancel-rest' | 'again' }
+  const savePo = async () => {
+    try { await axios.put(`${API_BASE}/restaurant/orders/${poEdit.id}/ref`, { poNumber: poEdit.value.trim() }, authHeader); setPoEdit(null); load(); }
     catch (err) { setError(err.response?.data?.error || 'Could not save the PO number'); }
   };
+  // "Order again": the same product, amount, PO and frozen choice from the same farm
+  const orderAgain = async (o) => {
+    setError(null); setMessage(null);
+    try {
+      await axios.post(`${API_BASE}/restaurant/orders`, o.isMeat
+        ? { meat: true, farmerAddress: o.farmerAddress, productName: o.productName, species: o.species || undefined, quantity: o.quantity, frozen: o.frozen || undefined, poNumber: o.poNumber || undefined }
+        : { farmerAddress: o.farmerAddress, productName: o.productName, unit: o.unit, quantity: o.quantity, poNumber: o.poNumber || undefined }, authHeader);
+      setAsking(null);
+      setMessage(`Ordered ${formatQty(o.quantity, o.unit)} ${o.productName} from ${o.farmName} again.`);
+      load();
+    } catch (err) {
+      setAsking(null);
+      setError(`${o.productName}: ${err.response?.data?.error || 'could not order it again'}`);
+    }
+  };
+  // What's owed to each farm (delivered, not marked paid)
+  const owedByFarm = Object.values(orders
+    .filter(o => ['dispatched', 'part_sent', 'closed_short'].includes(o.status) && o.paymentStatus !== 'paid' && (o.owed ?? o.total) > 0)
+    .reduce((m, o) => {
+      const f = m[o.farmerAddress] || (m[o.farmerAddress] = { farm: o.farmName, owed: 0, orders: 0, estimate: false });
+      f.owed = Math.round((f.owed + Number(o.owed ?? o.total)) * 100) / 100; f.orders++; if (!o.owedFinal) f.estimate = true;
+      return m;
+    }, {}));
 
   const cancelOrder = async (o) => {
     try {
@@ -823,6 +857,24 @@ function OrderStock({ authHeader, approved }) {
         </form>
       </div>}
 
+      {owedByFarm.length > 0 && (
+        <div className="bg-white rounded-lg shadow-lg p-6">
+          <h3 className="text-lg font-bold text-gray-800 mb-1">💷 Owed to farms</h3>
+          <p className="text-xs text-gray-500 mb-3">Delivered orders the farm hasn't marked as paid yet. Pay the farm directly; they tick it off.</p>
+          <div className="divide-y divide-gray-100">
+            {owedByFarm.map(f => (
+              <div key={f.farm} className="py-2 flex justify-between gap-3 text-sm">
+                <span>{f.farm} <span className="text-gray-500">· {f.orders} order{f.orders === 1 ? '' : 's'}</span></span>
+                <span className="font-semibold text-gray-800">{gbp(f.owed)}{f.estimate && <span className="text-xs font-normal text-gray-500"> so far</span>}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {/* the produce tab shows these inside its order form */}
+      {kind === 'meat' && message && <p className="text-sm text-green-700 font-semibold">✅ {message}</p>}
+      {kind === 'meat' && error && <p className="text-sm text-red-600 font-semibold">⚠️ {error}</p>}
+
       <div className="bg-white rounded-lg shadow-lg p-8">
         <h3 className="text-lg font-bold text-gray-800 mb-4">📋 Your {kind === 'meat' ? 'meat' : 'fruit, veg & more'} orders</h3>
         {shown.length === 0 ? (
@@ -834,7 +886,15 @@ function OrderStock({ authHeader, approved }) {
                 <div className="flex-1 min-w-0">
                   <p className="font-semibold text-gray-800">{o.isMeat ? '🥩 ' : ''}{formatQty(o.status === 'part_sent' ? o.quantity : (o.quantitySent ?? o.quantity), o.unit)} {o.productName} — {o.farmName}{o.isDeal ? ' 🏷️' : ''}
                     {o.frozen && <span className="ml-1 text-xs font-semibold bg-sky-100 text-sky-800 px-1.5 py-0.5 rounded">❄️ frozen</span>}</p>
-                  <p className="text-xs"><Refs x={o} /> {!['declined', 'cancelled'].includes(o.status) && <button onClick={() => editPo(o)} className="text-blue-600 hover:underline ml-1">{o.poNumber ? 'change PO' : '+ add your PO number'}</button>}</p>
+                  <p className="text-xs"><Refs x={o} /> {!['declined', 'cancelled'].includes(o.status) && poEdit?.id !== o.id && <button onClick={() => setPoEdit({ id: o.id, value: o.poNumber || '' })} className="text-blue-600 hover:underline ml-1">{o.poNumber ? 'change PO' : '+ add your PO number'}</button>}</p>
+                  {poEdit?.id === o.id && (
+                    <div className="flex gap-2 items-center mt-1">
+                      <input autoFocus value={poEdit.value} maxLength={40} onChange={(e) => setPoEdit({ ...poEdit, value: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && savePo()}
+                        placeholder="Your PO number" className="px-2 py-1 border border-gray-300 rounded text-xs w-40" />
+                      <button onClick={savePo} className="text-xs font-semibold text-white bg-orange-600 px-2 py-1 rounded">Save</button>
+                      <button onClick={() => setPoEdit(null)} className="text-xs text-gray-500 hover:underline">Cancel</button>
+                    </div>
+                  )}
                   {o.isMeat && o.status === 'requested' && <p className="text-xs text-gray-600">{o.preOrder ? '📋 Pre-order: sent once your cuts are ready' : '🔪 Ready: the farm or its abattoir sends it to you'}</p>}
                   {o.isMeat && o.sentByName && o.sentBy !== o.farmerAddress && <p className="text-xs text-gray-600">🔪 Sent by {o.sentByName}</p>}
                   {o.status === 'part_sent' && <p className="text-xs text-amber-800 font-semibold">{formatQty(o.quantitySent, o.unit)} of {formatQty(o.quantity, o.unit)} sent so far · {formatQty(o.outstanding, o.unit)} still to come</p>}
@@ -877,13 +937,24 @@ function OrderStock({ authHeader, approved }) {
                   {['dispatched', 'part_sent', 'closed_short'].includes(o.status) && (
                     <p className="text-xs text-gray-500">{o.paymentStatus === 'paid' ? '💷 Paid' : 'Payment due'}</p>
                   )}
-                  {o.status === 'part_sent' && (
-                    <button onClick={() => window.confirm(`Cancel the ${formatQty(o.outstanding, o.unit)} still to come? What's already been sent stays.`) && cancelOrder(o)}
+                  {o.status === 'part_sent' && (asking?.id === o.id && asking.kind === 'cancel-rest' ? (
+                    <span className="block text-xs text-gray-700">Cancel the {formatQty(o.outstanding, o.unit)} still to come?{' '}
+                      <button onClick={() => { setAsking(null); cancelOrder(o); }} className="text-red-600 font-semibold hover:underline">Yes</button>{' · '}
+                      <button onClick={() => setAsking(null)} className="hover:underline">No</button></span>
+                  ) : (
+                    <button onClick={() => setAsking({ id: o.id, kind: 'cancel-rest' })}
                       className="block text-xs text-red-600 hover:underline ml-auto">Cancel the rest</button>
-                  )}
+                  ))}
                   {o.status === 'requested' && (
                     <button onClick={() => cancelOrder(o)} className="block text-xs text-red-600 hover:underline ml-auto">Cancel</button>
                   )}
+                  {!['requested', 'part_sent'].includes(o.status) && !o.isDeal && approved && (asking?.id === o.id && asking.kind === 'again' ? (
+                    <span className="block text-xs text-gray-700">{formatQty(o.quantity, o.unit)} again?{' '}
+                      <button onClick={() => orderAgain(o)} className="text-orange-700 font-semibold hover:underline">Yes, order</button>{' · '}
+                      <button onClick={() => setAsking(null)} className="hover:underline">No</button></span>
+                  ) : (
+                    <button onClick={() => setAsking({ id: o.id, kind: 'again' })} className="block text-xs font-semibold text-orange-700 hover:underline ml-auto">🔁 Order again</button>
+                  ))}
                 </div>
               </div>
             ))}
@@ -891,6 +962,28 @@ function OrderStock({ authHeader, approved }) {
         )}
       </div>
     </div>
+  );
+}
+
+// v4.4 — getting started for a new café: verified → approved → first order → first delivery → a dish → a receipt
+function CafeChecklist({ authHeader, emailVerified, approved, restaurantUser, go }) {
+  const [d, setD] = useState(null);
+  useEffect(() => {
+    if (!approved) { setD({}); return; }
+    const get = (p) => axios.get(`${API_BASE}${p}`, authHeader).then(r => r.data).catch(() => ({}));
+    Promise.all([get('/restaurant/orders'), get('/restaurant/inbound'), get('/restaurant/dishes'), get('/restaurant/my-receipts')])
+      .then(([o, i, ds, rc]) => setD({ orders: (o.orders || []).length, received: (i.shipments || []).filter(s => s.status === 'delivered').length, dishes: (ds.dishes || []).length, receipts: (rc.receipts || []).length }));
+  }, [approved]);
+  if (!d) return null;
+  return (
+    <Checklist storageKey={`fp_cafe_checklist_${restaurantUser.email}`} title="Getting started" steps={[
+      { done: emailVerified !== false, label: 'Verify your email', hint: 'Click the link we emailed you.' },
+      { done: !!approved, label: 'Get approved', hint: 'We check every café before it can order, usually within a day. You’ll get an email.' },
+      { done: d.orders > 0, label: 'Order from a local farm', hint: 'Fruit & veg, or meat from a farm’s meat prices.', action: { label: 'Order stock', onClick: () => go('order') } },
+      { done: d.received > 0, label: 'Confirm your first delivery', hint: 'When it arrives, tap “All arrived”. Add a photo if you can.', action: { label: 'Open Deliveries', onClick: () => go('deliveries') } },
+      { done: d.dishes > 0, label: 'Save a dish', hint: 'Its menu price and what goes into one serving, so receipts take the right amounts off your stock.', action: { label: 'Add a dish', onClick: () => go('create') } },
+      { done: d.receipts > 0, label: 'Make your first receipt', hint: 'Diners scan its QR code to see where their food came from.', action: { label: 'New receipt', onClick: () => go('create') } },
+    ]} />
   );
 }
 
@@ -1120,8 +1213,10 @@ function DishManager({ dishes, authHeader, onChanged }) {
     }
   };
 
+  const [removing, setRemoving] = useState(null);   // dish id waiting for "Yes, remove"
   const remove = async (d) => {
-    if (!window.confirm(`Remove "${d.name}"?`)) return;
+    if (removing !== d.id) { setRemoving(d.id); return; }
+    setRemoving(null);
     try {
       await axios.delete(`${API_BASE}/restaurant/dishes/${d.id}`, authHeader);
       onChanged?.();
@@ -1155,7 +1250,7 @@ function DishManager({ dishes, authHeader, onChanged }) {
               </div>
               <div className="flex gap-3 shrink-0">
                 <button type="button" onClick={() => edit(d)} className="text-xs text-blue-600 hover:underline">Edit</button>
-                <button type="button" onClick={() => remove(d)} className="text-xs text-red-600 hover:underline">Remove</button>
+                <button type="button" onClick={() => remove(d)} className="text-xs text-red-600 hover:underline">{removing === d.id ? 'Tap again to remove' : 'Remove'}</button>
               </div>
             </li>
           ))}
@@ -1232,6 +1327,7 @@ function Deliveries({ authHeader, approved, onReceived }) {
   const [qty,       setQty]       = useState({});   // shipmentId → quantity received
   const [refused,   setRefused]   = useState({});   // shipmentId → quantity turned away at the door (typed by hand)
   const [goodsIn,   setGoodsIn]   = useState({});   // shipmentId → the café's own goods-in reference (v4.3)
+  const [detail,    setDetail]    = useState({});   // shipmentId → showing the "something's wrong" form (v4.4)
   const [agree,     setAgree]     = useState({});   // shipmentId → agree to the farm's terms (default yes)
   const [notes,     setNotes]     = useState({});
   const [photos,    setPhotos]    = useState({});   // shipmentId → { file, preview } (proof of delivery)
@@ -1252,23 +1348,16 @@ function Deliveries({ authHeader, approved, onReceived }) {
   };
   useEffect(() => { load(); }, []);
 
-  const receive = async (s) => {
-    // The depot / courier hasn't logged "Out for delivery" — allowed (the goods are here), but double-check
-    if (s.carrierName && !s.carrierSteps?.out &&
-        !window.confirm(`${s.carrierName} hasn't marked this as out for delivery yet.\n\nHas it physically arrived with you? Confirm anyway?`)) {
-      return;
-    }
-    // A photo is optional, but encouraged
+  // v4.4: "all" = the one-tap path (everything arrived as sent). The warnings that used to pop up
+  // (no photo, courier not marked out for delivery) are now shown on the card instead.
+  const receive = async (s, all = false) => {
     const photo = photos[s.shipmentId];
-    if (!photo && !window.confirm('No delivery photo added.\n\nA photo helps settle any disagreement about what arrived. Confirm without one?')) {
-      return;
-    }
     setBusyId(s.shipmentId);
     setError(null);
     try {
       const form = new FormData();
-      form.append('quantityReceived', String(acceptedOf(s)));
-      form.append('quantityRejected', String(refusedOf(s)));
+      form.append('quantityReceived', String(all ? s.quantitySent : acceptedOf(s)));
+      form.append('quantityRejected', String(all ? 0 : refusedOf(s)));
       if (goodsIn[s.shipmentId]) form.append('receiverRef', goodsIn[s.shipmentId]);
       form.append('acceptTerms', agree[s.shipmentId] === false ? 'false' : 'true');
       form.append('notes', notes[s.shipmentId] || '');
@@ -1320,11 +1409,35 @@ function Deliveries({ authHeader, approved, onReceived }) {
   const incoming = shipments.filter(s => s.status === 'in_transit' && s.kind !== 'return');
   const received = shipments.filter(s => s.status === 'delivered');
 
+  // v4.4: stock nudges — recalled, past its use-by, use first (use-by within 2 days), running low (under a fifth left)
+  const DAY = 86400e3;
+  const held = received.filter(s => s.available > 0);
+  const nudges = [
+    ...held.filter(s => s.recalled).map(s => ({ tone: 'red', icon: '🚨', text: `${s.productName} (${s.farmName || s.fromName}) is recalled: don't use it. Send it back or write it off below.` })),
+    ...held.filter(s => !s.recalled && s.useBy && new Date(s.useBy) < new Date()).map(s => ({ tone: 'red', icon: '⛔', text: `${formatQty(s.available, s.unit)} ${s.productName} is past its use-by (${new Date(s.useBy).toLocaleDateString('en-GB')}). Write it off below.` })),
+    ...held.filter(s => !s.recalled && s.useBy && new Date(s.useBy) >= new Date() && new Date(s.useBy) - Date.now() < 2 * DAY)
+      .map(s => ({ tone: 'amber', icon: '⏰', text: `Use first: ${formatQty(s.available, s.unit)} ${s.productName}, use by ${new Date(s.useBy).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}` })),
+    ...held.filter(s => !s.recalled && s.quantityReceived > 0 && s.available <= s.quantityReceived * 0.2)
+      .map(s => ({ tone: 'gray', icon: '📉', text: `Running low: ${formatQty(s.available, s.unit)} ${s.productName} left of ${formatQty(s.quantityReceived, s.unit)}. Time to order more?` })),
+  ];
+
   return (
     <div className="space-y-6">
+      {nudges.length > 0 && (
+        <div className="bg-white rounded-lg shadow-lg p-6">
+          <h3 className="text-lg font-bold text-gray-800 mb-3">🧺 Your stock today</h3>
+          <div className="space-y-2">
+            {nudges.map((n, i) => (
+              <p key={i} className={`text-sm rounded-lg px-3 py-2 border ${n.tone === 'red' ? 'bg-red-50 border-red-200 text-red-800' : n.tone === 'amber' ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-gray-50 border-gray-200 text-gray-700'}`}>
+                {n.icon} {n.text}
+              </p>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="bg-white rounded-lg shadow-lg p-8">
         <h3 className="text-lg font-bold text-gray-800 mb-1">🚚 On its way to you</h3>
-        <p className="text-sm text-gray-500 mb-4">When it arrives, weigh/count it and confirm how much you actually received.</p>
+        <p className="text-sm text-gray-500 mb-4">When it arrives, tap <strong>All arrived</strong>. If anything's short, damaged or you're turning some away, tap <strong>Something wrong?</strong> instead.</p>
         {error && <p className="text-sm text-red-600 font-semibold mb-3">⚠️ {error}</p>}
         {loading ? (
           <p className="text-sm text-gray-500">Loading…</p>
@@ -1369,7 +1482,27 @@ function Deliveries({ authHeader, approved, onReceived }) {
                     ⚠️ {s.carrierName} hasn't marked this as out for delivery yet. You can still confirm it if it has arrived.
                   </p>
                 )}
-                <div className="flex gap-2 mt-3 flex-wrap items-center">
+                {/* v4.4: one tap when everything's there; the full form only when something's wrong */}
+                {!detail[s.shipmentId] && (
+                  <div className="mt-3 space-y-2">
+                    <PhotoPicker photo={photos[s.shipmentId]} onChange={(p) => setPhotos({ ...photos, [s.shipmentId]: p })} disabled={busyId === s.shipmentId} />
+                    {!photos[s.shipmentId] && <p className="text-xs text-gray-500">📷 A photo is optional, but it settles any disagreement about what arrived.</p>}
+                    {s.terms && (s.terms.unitPrice != null || s.terms.total != null) && (
+                      <p className="text-xs text-gray-600">Confirming agrees the price: {s.terms.unitPrice != null ? <>{gbp(s.terms.unitPrice)}/{s.unit}{s.terms.deliveryFee ? ` + ${gbp(s.terms.deliveryFee)} delivery` : ''}</> : gbp(s.terms.total)}{payOf(s) !== null ? <> · you'll pay <strong>{gbp(payOf(s))}</strong></> : null}</p>
+                    )}
+                    <div className="flex gap-3 flex-wrap items-center">
+                      <button onClick={() => receive(s, true)} disabled={busyId === s.shipmentId || !approved}
+                        className="bg-green-600 text-white text-base font-bold px-5 py-3 rounded-xl hover:bg-green-700 disabled:bg-gray-400">
+                        {busyId === s.shipmentId ? '⛓️ Recording… (about 5 sec)' : `✅ All ${formatQty(s.quantitySent, s.unit)} arrived`}
+                      </button>
+                      <button onClick={() => setDetail({ ...detail, [s.shipmentId]: true })} disabled={busyId === s.shipmentId}
+                        className="text-sm text-gray-700 underline underline-offset-2 hover:text-gray-900">Something wrong? Short, damaged or refusing some →</button>
+                    </div>
+                  </div>
+                )}
+                {detail[s.shipmentId] && (<>
+                <button onClick={() => setDetail({ ...detail, [s.shipmentId]: false })} className="mt-3 text-xs text-gray-500 hover:underline">← Back to "all arrived"</button>
+                <div className="flex gap-2 mt-2 flex-wrap items-center">
                   <span className="text-sm text-gray-600 w-20">Accepted:</span>
                   <input type="number" step="any" min="0" max={s.quantitySent}
                     value={acceptedOf(s)}
@@ -1427,8 +1560,9 @@ function Deliveries({ authHeader, approved, onReceived }) {
                 />
                 <button onClick={() => receive(s)} disabled={busyId === s.shipmentId || !approved}
                   className="mt-3 bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
-                  {busyId === s.shipmentId ? (photos[s.shipmentId] ? '📷 Uploading & recording…' : '⛓️ Recording…') : '✅ Confirm received'}
+                  {busyId === s.shipmentId ? (photos[s.shipmentId] ? '📷 Uploading & recording…' : '⛓️ Recording… (about 5 sec)') : '✅ Confirm what arrived'}
                 </button>
+                </>)}
               </div>
             ))}
           </div>

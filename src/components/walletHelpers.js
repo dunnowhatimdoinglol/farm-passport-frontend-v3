@@ -198,3 +198,45 @@ export async function writeNfcUrl(url) {
   const ndef = new window.NDEFReader();
   await ndef.write({ records: [{ recordType: 'url', data: url }] }, { overwrite: true });
 }
+
+// ─────────────────────────────────────────────
+// v4.4 — friendlier waiting. When a request to Farm Passport takes a while, a small note appears at the bottom
+// of the screen saying why: recording on the blockchain (about 5 seconds), or the server waking up after a quiet
+// spell (up to about 30 seconds). Installed once, for every page that uses axios.
+// ─────────────────────────────────────────────
+if (typeof window !== 'undefined' && !window.__fpSlowNote) {
+  window.__fpSlowNote = true;
+  const pending = new Map();
+  let seq = 0, el = null, timer = null;
+  const ours = (url) => String(url || '').startsWith(API_BASE.replace(/\/api$/, ''));
+  const render = () => {
+    const now = Date.now();
+    const slow = [...pending.values()].filter(p => now - p.t > 2500);
+    if (!slow.length) { if (el) el.style.display = 'none'; if (!pending.size && timer) { clearInterval(timer); timer = null; } return; }
+    const writing = slow.some(p => p.write);
+    const long = slow.some(p => now - p.t > 7000);
+    const text = writing && !long ? '⛓️ Recording on the blockchain… this usually takes about 5 seconds'
+      : long ? '☕ Waking up Farm Passport… after a quiet spell this can take up to 30 seconds. Thanks for waiting!'
+      : '⏳ Still loading…';
+    if (!el) {
+      el = document.createElement('div');
+      el.setAttribute('role', 'status');
+      el.style.cssText = 'position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:9999;max-width:calc(100% - 32px);'
+        + 'background:#1C2A1F;color:#F6F6F2;padding:10px 16px;border-radius:12px;font:600 14px/1.35 Manrope,system-ui,sans-serif;'
+        + 'box-shadow:0 10px 30px rgba(0,0,0,.25);text-align:center';
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+    el.style.display = 'block';
+  };
+  axios.interceptors.request.use((cfg) => {
+    if (ours(cfg.url)) {
+      cfg.__fpId = ++seq;
+      pending.set(cfg.__fpId, { t: Date.now(), write: (cfg.method || 'get').toLowerCase() !== 'get' });
+      if (!timer) timer = setInterval(render, 500);
+    }
+    return cfg;
+  });
+  const done = (cfg) => { if (cfg?.__fpId) { pending.delete(cfg.__fpId); render(); } };
+  axios.interceptors.response.use((r) => { done(r.config); return r; }, (e) => { done(e.config); return Promise.reject(e); });
+}

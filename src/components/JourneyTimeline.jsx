@@ -242,13 +242,62 @@ function ShipmentCard({ shipment, checkpoints, unit, depth }) {
  *                 with a summary of everything else and a button to see the full journey
  *   refreshKey  – change it to re-load
  */
+// v4.4 — the story first, in plain words: where it was grown or reared, who prepared it, when it reached the café,
+// and how long that took. The step-by-step proof sits underneath, folded away for the curious.
+function StoryCard({ data, shipmentId }) {
+  const { batch, shipments = [] } = data;
+  const lineage = data.lineage || [];
+  const madeFrom = data.madeFrom || null;
+  const animal = lineage.find(l => !l.madeFrom && l.species) || (batch.species && !madeFrom ? batch : null);
+  const farm = batch.farmName || animal?.farmName || null;
+  const steps = [...lineage.map(l => l.madeFrom).filter(Boolean), madeFrom].filter(Boolean);
+  const slaughter = steps.find(m => m.kind === 'Slaughter');
+  const made = madeFrom && madeFrom.kind !== 'Slaughter' ? madeFrom : null;
+  const delivered = shipments.filter(s => s.status === 'delivered');
+  const last = (shipmentId && shipments.find(s => Number(s.shipmentId) === Number(shipmentId))) || delivered[delivered.length - 1] || null;
+  const startDate = animal ? (slaughter?.madeOn || null) : (batch.harvestDate || batch.registeredAt);
+  const endDate = last?.deliveredAt || null;
+  const days = startDate && endDate ? Math.max(0, Math.round((new Date(endDate) - new Date(startDate)) / 86400e3)) : null;
+  const items = [
+    animal
+      ? { icon: SPECIES_ICON[animal.species] || '🐄', title: `Reared at ${farm || 'a local farm'}`, sub: [animal.breed, animal.bornIn && `born in ${animal.bornIn}`].filter(Boolean).join(' · ') }
+      : { icon: '🌱', title: `${madeFrom ? 'Made from produce grown' : 'Grown'} at ${farm || 'a local farm'}`, sub: batch.harvestDate ? `picked ${fmtDay(batch.harvestDate)}` : null },
+    slaughter && { icon: '🔪', title: `Prepared at ${slaughter.processorName || 'a licensed abattoir'}`, sub: slaughter.madeOn ? fmtDay(slaughter.madeOn) : null },
+    made && made.processorName !== slaughter?.processorName && { icon: '🥩', title: `${made.kind === 'Cutting' ? 'Cut' : made.kind} at ${made.processorName || 'the butcher'}`, sub: made.madeOn ? fmtDay(made.madeOn) : null },
+    last && { icon: '🍽️', title: `${last.status === 'delivered' ? 'Delivered to' : 'On its way to'} ${last.toName}`, sub: last.deliveredAt ? fmtDay(last.deliveredAt) : null },
+  ].filter(Boolean);
+  return (
+    <div className="rounded-2xl border border-green-200 bg-gradient-to-br from-green-50 to-white p-5 mb-5">
+      <p className="text-xs font-semibold uppercase tracking-wider text-green-800">Your {batch.productName}</p>
+      <p className="text-2xl font-extrabold text-gray-900 leading-tight mt-0.5">{farm ? `From ${farm}` : 'From a local farm'}</p>
+      {days !== null && (
+        <p className="mt-1 text-sm text-gray-700">
+          {animal ? <>Prepared <strong>{days === 0 ? 'the same day' : `${days} day${days === 1 ? '' : 's'}`}</strong> before it reached {last?.toName}</>
+            : <>Picked <strong>{days === 0 ? 'the same day' : `${days} day${days === 1 ? '' : 's'}`}</strong> before it reached {last?.toName}</>}
+        </p>
+      )}
+      <ol className="mt-4 space-y-3">
+        {items.map((it, i) => (
+          <li key={i} className="flex gap-3 items-start">
+            <span className="w-9 h-9 shrink-0 rounded-full bg-white border border-green-200 flex items-center justify-center text-lg">{it.icon}</span>
+            <span><span className="block font-semibold text-gray-900">{it.title}</span>{it.sub && <span className="block text-sm text-gray-600">{it.sub}</span>}</span>
+          </li>
+        ))}
+      </ol>
+      <p className="mt-4 inline-flex items-center gap-1.5 text-xs font-semibold text-green-800 bg-green-100 px-2.5 py-1 rounded-full">✔ Every step is recorded publicly and can't be changed</p>
+    </div>
+  );
+}
+
 function JourneyTimeline({ batchId, shipmentId = null, refreshKey = 0 }) {
   const [data,    setData]    = useState(null);
   const [full,    setFull]    = useState(!shipmentId);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
+  // v4.4: a diner's view (one delivery) opens on the story; the step-by-step proof is one tap away
+  const [proof,   setProof]   = useState(!shipmentId);
 
-  useEffect(() => { setFull(!shipmentId); }, [shipmentId]);
+  useEffect(() => { setFull(!shipmentId); setProof(!shipmentId); }, [shipmentId]);
 
   useEffect(() => {
     if (!batchId) return;
@@ -268,7 +317,7 @@ function JourneyTimeline({ batchId, shipmentId = null, refreshKey = 0 }) {
     })();
   }, [batchId, shipmentId, full, refreshKey]);
 
-  const header = (
+  const header = shipmentId ? null : (
     <>
       <h3 className="text-xl font-bold text-gray-800 mb-1">🔗 Journey</h3>
       <p className="text-sm text-gray-500 mb-5">Every step is recorded on the blockchain and can't be changed.</p>
@@ -326,7 +375,16 @@ function JourneyTimeline({ batchId, shipmentId = null, refreshKey = 0 }) {
           <p className="text-sm text-red-700 mt-1">If you still have any of this product, don't eat it — return it to where you bought it.</p>
         </div>
       )}
-      <div className="space-y-6">
+      {shipmentId && <StoryCard data={data} shipmentId={shipmentId} />}
+      {shipmentId && (
+        <button onClick={() => setProof(!proof)} aria-expanded={proof}
+          className="w-full flex justify-between items-center text-left bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg px-4 py-3 mb-5">
+          <span><span className="font-semibold text-gray-800">🔗 Every step, with the blockchain proof</span>
+            <span className="block text-xs text-gray-500">Who handled it, when, and the public records you can check yourself</span></span>
+          <span className="text-sm text-gray-600 shrink-0">{proof ? 'Hide ▴' : 'Show ▾'}</span>
+        </button>
+      )}
+      {proof && <div className="space-y-6">
         {lineage.length > 0 && (
           <section>
             <h4 className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-3">{SPECIES_ICON[batch.species] || '🌾'} Where it came from</h4>
@@ -414,7 +472,7 @@ function JourneyTimeline({ batchId, shipmentId = null, refreshKey = 0 }) {
           </>
         )}
         <ChainHelp who="diner" />
-      </div>
+      </div>}
     </div>
   );
 }
