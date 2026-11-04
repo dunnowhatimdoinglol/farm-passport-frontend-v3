@@ -3,7 +3,7 @@ import axios from 'axios';
 import CreateBatchForm from './CreateBatchForm';
 import { QRCodeSVG } from 'qrcode.react';
 import { FarmerOrders, DispatchForm, FarmerShipments, FarmerReturns, FarmerMeatList } from './FarmerSupply';
-import { formatQty, batchLink } from './walletHelpers';
+import { formatQty, batchLink, API_BASE } from './walletHelpers';
 import NfcShare from './NfcShare';
 import { ChainHelp } from './ChainProof';
 
@@ -36,13 +36,29 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
   // Which batch is being recalled (hooks must all sit up here, before any early "return")
   const [recallBusy, setRecallBusy] = useState(null);
 
+  // v4.2 — one section at a time: a "Today" to-do page, then tabs. The open tab is remembered for this browser tab.
+  const [tab, setTabState] = useState(() => { try { return sessionStorage.getItem('fp_farm_tab') || 'today'; } catch { return 'today'; } });
+  const setTab = (t) => {
+    setTabState(t);
+    try { sessionStorage.setItem('fp_farm_tab', t); } catch { /* private window */ }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  // What needs doing: orders, deliveries sent, deliveries coming in (for "Today" and the tab counts)
+  const [todo, setTodo] = useState(null);
+  const fetchTodo = async () => {
+    const get = (path) => axios.get(`${API_BASE}${path}`, authHeader).then(r => r.data).catch(() => ({}));
+    const [o, s, i] = await Promise.all([get('/farmer/orders'), get('/farmer/shipments'), get('/farmer/inbound')]);
+    setTodo({ orders: o.orders || [], shipments: s.shipments || [], inbound: i.shipments || [] });
+  };
+
   useEffect(() => {
     fetchDashboardData();
   }, [refreshTrigger]);
+  useEffect(() => { fetchTodo(); }, [refreshTrigger, tab]);
 
   const fetchDashboardData = async () => {
     try {
-      setLoading(true);
+      if (!farmerData) setLoading(true);     // only the first load shows the full-page spinner
       setError(null);
 
       const response = await axios.post('https://farm-passport-backend-v3.onrender.com/api/farmer/dashboard', {}, authHeader);
@@ -143,7 +159,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
     img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
   };
 
-  if (loading) {
+  if (loading && !farmerData) {
     return (
       <div className="max-w-6xl mx-auto">
         <div className="bg-white rounded-lg shadow-lg p-8 text-center">
@@ -320,6 +336,15 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
         </button>
       </div>
 
+      {/* Tabs */}
+      <DashboardTabs tab={tab} setTab={setTab} approved={approved} counts={tabCounts(todo)} />
+
+      {(tab === 'today' || (tab === 'meat' && !approved)) && (
+        <TodayPanel todo={todo} batches={batches} approved={approved} farmName={farmer.farmName} go={setTab}
+          onCreate={() => { setTab('batches'); setShowCreateBatch(true); }} />
+      )}
+
+      {tab === 'farm' && (<>
       {/* Farm Overview Card */}
       <div className="bg-gradient-to-r from-green-600 to-green-700 text-white rounded-lg shadow-lg p-6 mb-6">
         <div className="flex items-start justify-between">
@@ -438,19 +463,25 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
 
       {/* How to check records on the blockchain */}
       <ChainHelp who="farm" className="mb-6" />
+      </>)}
 
       {/* Orders from restaurants */}
-      <FarmerOrders farmerToken={farmerToken} approved={approved} refreshKey={refreshTrigger} onChanged={refreshAll} />
+      {tab === 'orders' && <FarmerOrders farmerToken={farmerToken} approved={approved} refreshKey={refreshTrigger} onChanged={refreshAll} />}
 
       {/* Meat list (what cafés can order) + cutting list (what they've pre-ordered) */}
-      {approved && <FarmerMeatList farmerToken={farmerToken} refreshKey={refreshTrigger} />}
+      {tab === 'meat' && approved && <FarmerMeatList farmerToken={farmerToken} refreshKey={refreshTrigger} />}
 
-      {/* Shipments sent */}
-      <FarmerShipments farmerToken={farmerToken} refreshKey={refreshTrigger} onChanged={refreshAll} />
+      {tab === 'deliveries' && (<>
+        {/* Coming in to the farm: returns, boxed meat back from the abattoir */}
+        <FarmerReturns farmerToken={farmerToken} refreshKey={refreshTrigger} onChanged={refreshAll} />
+        {/* Shipments sent (refused goods to check in are at the top) */}
+        <FarmerShipments farmerToken={farmerToken} refreshKey={refreshTrigger} onChanged={refreshAll} />
+        {todo && !todo.shipments.length && !todo.inbound.length && (
+          <div className="bg-white rounded-lg shadow-lg p-6 text-sm text-gray-500">No deliveries yet. Send a batch from the <button onClick={() => setTab('batches')} className="text-green-700 font-semibold hover:underline">Batches</button> tab, or dispatch an order.</div>
+        )}
+      </>)}
 
-      {/* Returns coming back to the farm (only shows when there are some) */}
-      <FarmerReturns farmerToken={farmerToken} refreshKey={refreshTrigger} onChanged={refreshAll} />
-
+      {tab === 'batches' && (<>
       {/* Create Batch Button / Form */}
       {!showCreateBatch ? (
         <button
@@ -770,6 +801,160 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
             })}
           </div>
         )}
+      </div>
+      </>)}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// v4.2 — tabs and the "Today" page
+// ─────────────────────────────────────────────
+
+const TABS = [
+  ['today', '🏠', 'Today'], ['batches', '📦', 'Batches'], ['orders', '🧾', 'Orders'],
+  ['deliveries', '🚚', 'Deliveries'], ['meat', '🥩', 'Meat list'], ['farm', '🏡', 'Farm profile'],
+];
+
+/** Things waiting for the farm, worked out from its orders and deliveries */
+function needs(todo) {
+  if (!todo) return null;
+  const open = todo.orders.filter(o => o.open ?? ['requested', 'part_sent'].includes(o.status));
+  const toSend = open.filter(o => !o.isMeat || o.readyAtFarm > 0);
+  return {
+    newOrders: toSend.filter(o => o.status === 'requested'),
+    partSent: toSend.filter(o => o.status === 'part_sent'),
+    meatElsewhere: open.filter(o => o.isMeat && !(o.readyAtFarm > 0)),
+    unpaid: todo.orders.filter(o => ['dispatched', 'closed_short'].includes(o.status) && o.shipmentStatus === 'delivered' && o.paymentStatus !== 'paid'),
+    comingBack: todo.shipments.filter(s => s.awaitingReturn > 0),
+    noFci: todo.shipments.filter(s => s.productType === 'Livestock' && s.fciProvided === false && s.status !== 'cancelled' && !(s.status === 'delivered' && s.quantityReceived === 0)),
+    onTheWay: todo.shipments.filter(s => s.status === 'in_transit'),
+    comingIn: todo.inbound.filter(s => s.status === 'in_transit'),
+  };
+}
+
+function tabCounts(todo) {
+  const n = needs(todo);
+  if (!n) return {};
+  return {
+    orders: n.newOrders.length + n.partSent.length,
+    deliveries: n.comingBack.length + n.noFci.length + n.comingIn.length,
+  };
+}
+
+function DashboardTabs({ tab, setTab, approved, counts }) {
+  return (
+    <div className="sticky top-0 z-20 -mx-1 px-1 py-2 mb-4 bg-gray-50/95 backdrop-blur">
+      <div className="flex gap-1 overflow-x-auto bg-white rounded-lg shadow p-1" role="tablist">
+        {TABS.filter(([k]) => k !== 'meat' || approved).map(([k, icon, label]) => (
+          <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+            className={`shrink-0 flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-md text-sm font-semibold whitespace-nowrap transition ${tab === k ? 'bg-green-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+            <span>{icon}</span><span>{label}</span>
+            {counts[k] > 0 && (
+              <span className={`text-xs rounded-full px-1.5 min-w-[1.25rem] text-center ${tab === k ? 'bg-white text-green-700' : 'bg-amber-400 text-amber-950'}`}>{counts[k]}</span>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TodayPanel({ todo, batches, approved, farmName, go, onCreate }) {
+  const n = needs(todo);
+  const hour = new Date().getHours();
+  const hello = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  const live = (b) => !b.recalled && Number(b.quantityRemaining ?? b.quantity) > 0;
+  const nearUseBy = batches.filter(b => live(b) && b.useSoon && b.dealPrice == null);
+  const animals = batches.filter(b => live(b) && b.productType === 'Livestock');
+  const plural = (k, one, many) => (k === 1 ? one : many);
+  const qtyList = (list) => list.slice(0, 3).map(o => `${formatQty(o.outstanding ?? o.quantity, o.unit)} ${o.productName} for ${o.restaurantName}`).join(' · ') + (list.length > 3 ? ` · +${list.length - 3} more` : '');
+
+  // Most urgent first: things that hold up a café, an abattoir or your stock
+  const items = !n ? [] : [
+    n.comingBack.length && { tone: 'urgent', icon: '↩️', tab: 'deliveries', action: 'Check them in',
+      title: `${n.comingBack.length} refused ${plural(n.comingBack.length, 'delivery is', 'deliveries are')} coming back`,
+      sub: `${n.comingBack.map(s => `${formatQty(s.awaitingReturn, s.unit)} ${s.productName} from ${s.toName}`).join(' · ')}. Put it back in stock or write it off.` },
+    n.noFci.length && { tone: 'urgent', icon: '📋', tab: 'deliveries', action: 'Send the FCI',
+      title: `Food Chain Information missing for ${n.noFci.length} animal ${plural(n.noFci.length, 'delivery', 'deliveries')}`,
+      sub: 'The abattoir needs it before slaughter.' },
+    n.newOrders.length && { tone: 'todo', icon: '🧾', tab: 'orders', action: 'Send orders',
+      title: `${n.newOrders.length} new ${plural(n.newOrders.length, 'order', 'orders')} to send`, sub: qtyList(n.newOrders) },
+    n.partSent.length && { tone: 'todo', icon: '🟡', tab: 'orders', action: 'See orders',
+      title: `${n.partSent.length} part-sent ${plural(n.partSent.length, 'order has', 'orders have')} more to send`,
+      sub: `${qtyList(n.partSent)}. Send the rest, or close it with a message.` },
+    n.comingIn.length && { tone: 'todo', icon: '📥', tab: 'deliveries', action: 'Confirm',
+      title: `${n.comingIn.length} ${plural(n.comingIn.length, 'delivery', 'deliveries')} coming in to you`,
+      sub: n.comingIn.map(s => `${formatQty(s.quantitySent, s.unit)} ${s.productName} from ${s.fromName}`).join(' · ') },
+    nearUseBy.length && { tone: 'todo', icon: '⏰', tab: 'batches', action: 'See batches',
+      title: `${nearUseBy.length} ${plural(nearUseBy.length, 'batch is', 'batches are')} close to the use-by date`,
+      sub: `${nearUseBy.slice(0, 3).map(b => b.productName).join(', ')}. Make it a deal so cafés snap it up?` },
+    n.unpaid.length && { tone: 'info', icon: '💷', tab: 'orders', action: 'See orders',
+      title: `${n.unpaid.length} delivered ${plural(n.unpaid.length, 'order isn’t', 'orders aren’t')} marked paid yet`,
+      sub: 'Tick "Paid" on the order once the café has paid.' },
+    n.meatElsewhere.length && { tone: 'info', icon: '🔪', tab: 'orders', action: 'See orders',
+      title: `${n.meatElsewhere.length} meat ${plural(n.meatElsewhere.length, 'order is', 'orders are')} with the abattoir or on your cutting list`,
+      sub: 'Nothing for you to do unless you have the cuts at the farm.' },
+    n.onTheWay.length && { tone: 'info', icon: '🚚', tab: 'deliveries', action: 'See deliveries',
+      title: `${n.onTheWay.length} of your ${plural(n.onTheWay.length, 'delivery is', 'deliveries are')} on the way`, sub: 'Waiting for them to confirm what arrived.' },
+  ].filter(Boolean);
+  const todoCount = items.filter(i => i.tone !== 'info').length;
+  const TONE = {
+    urgent: 'border-orange-300 bg-orange-50', todo: 'border-amber-200 bg-amber-50', info: 'border-gray-200 bg-white',
+  };
+  const BTN = {
+    urgent: 'bg-orange-600 hover:bg-orange-700 text-white', todo: 'bg-green-600 hover:bg-green-700 text-white', info: 'border border-gray-300 text-gray-700 hover:bg-gray-50',
+  };
+
+  return (
+    <div className="space-y-4 mb-6">
+      <div className="bg-white rounded-lg shadow-lg p-6">
+        <h2 className="text-2xl font-bold text-gray-800">{hello}, {farmName}</h2>
+        <p className="text-gray-600 mt-0.5">
+          {!n ? 'Checking what needs doing…' : todoCount ? `${todoCount} ${plural(todoCount, 'thing needs', 'things need')} doing.` : '✅ You’re all caught up. Nothing needs doing right now.'}
+        </p>
+        <div className="flex gap-2 mt-4 flex-wrap">
+          <button onClick={onCreate} disabled={!approved}
+            className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">➕ New batch</button>
+          {animals.length > 0 && approved && (
+            <button onClick={() => go('batches')} className="bg-red-700 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-red-800">
+              🐄 Send animals to an abattoir</button>
+          )}
+          <button onClick={() => go('orders')} className="border border-gray-300 text-gray-700 text-sm font-semibold px-4 py-2 rounded-lg hover:bg-gray-50">🧾 All orders</button>
+        </div>
+      </div>
+
+      {!n ? (
+        <div className="bg-white rounded-lg shadow p-6 text-sm text-gray-500 animate-pulse">Loading your to-do list…</div>
+      ) : items.length > 0 && (
+        <div className="space-y-2">
+          {items.map((i, k) => (
+            <div key={k} className={`border-2 rounded-lg p-4 flex gap-3 items-start ${TONE[i.tone]}`}>
+              <span className="text-2xl leading-none">{i.icon}</span>
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-gray-800">{i.title}</p>
+                {i.sub && <p className="text-sm text-gray-600 mt-0.5 break-words">{i.sub}</p>}
+                {/* On a phone the button sits under the text */}
+                <button onClick={() => go(i.tab)} className={`sm:hidden mt-2 text-sm font-semibold px-3 py-1.5 rounded-lg ${BTN[i.tone]}`}>{i.action} →</button>
+              </div>
+              <button onClick={() => go(i.tab)} className={`hidden sm:block shrink-0 text-sm font-semibold px-3 py-1.5 rounded-lg ${BTN[i.tone]}`}>{i.action} →</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          ['📦', 'Batches with stock', batches.filter(live).length, 'batches'],
+          ['🐄', 'Animals on the farm', animals.reduce((x, b) => x + Number(b.quantityRemaining ?? b.quantity), 0), 'batches'],
+          ['🧾', 'Open orders', n ? n.newOrders.length + n.partSent.length + n.meatElsewhere.length : '…', 'orders'],
+          ['🎖️', 'Badges unlocked', batches.reduce((x, b) => x + (b.unlocks || 0), 0), 'farm'],
+        ].map(([icon, label, value, t]) => (
+          <button key={label} onClick={() => go(t)} className="bg-white rounded-lg shadow p-4 text-left hover:shadow-md transition">
+            <p className="text-xs text-gray-500">{icon} {label}</p>
+            <p className="text-2xl font-bold text-gray-800">{value}</p>
+          </button>
+        ))}
       </div>
     </div>
   );

@@ -138,6 +138,107 @@ export function RestChoice({ left, sending, unit, value, onChange }) {
     </div>
   );
 }
+// How each delivery of an order went: what the café accepted and refused, its note and delivery photo
+export function DeliveryResults({ o, token }) {
+  const ds = (o.dispatches || []).filter(d => d.status && d.status !== 'cancelled');
+  if (!ds.length) return null;
+  return (
+    <div className="mt-2 space-y-1">
+      {ds.map(d => (
+        <div key={d.shipmentId} className="text-xs bg-white/70 border border-gray-200 rounded px-2 py-1.5 space-y-0.5">
+          <p className="text-gray-700">
+            <span className="font-mono text-gray-500">#{d.shipmentId}</span> · {formatQty(d.quantity, o.unit)}{d.frozenOn ? ' · ❄️ frozen' : ''}{d.fromName && o.isMeat ? ` · from ${d.fromName}` : ''} ·{' '}
+            {d.status === 'delivered'
+              ? <>✅ <strong>{o.restaurantName}</strong> received {formatQty(d.received ?? d.quantity, o.unit)}
+                  {d.refused > 0 && <span className="text-orange-700 font-semibold"> · ↩️ {formatQty(d.refused, o.unit)} refused
+                    {d.awaitingReturn > 0 ? ' (coming back: check it in under Shipments sent)'
+                      : d.returnChecked ? ` (${[d.returnChecked.backInStock > 0 && `${formatQty(d.returnChecked.backInStock, o.unit)} back in stock`, d.returnChecked.writtenOff > 0 && `${formatQty(d.returnChecked.writtenOff, o.unit)} written off`].filter(Boolean).join(', ')})` : ''}</span>}
+                </>
+              : '🚚 on its way'}
+            {' '}<TxLink hash={d.sentTxHash} label="Sent" className="ml-1" />{d.status === 'delivered' && <TxLink hash={d.receivedTxHash} label="Received" className="ml-2" />}
+          </p>
+          {d.deliveryNotes && <p className="italic text-gray-700">💬 {o.restaurantName}: "{d.deliveryNotes}"</p>}
+          {d.hasDeliveryPhoto && <DeliveryPhotoButton shipmentId={d.shipmentId} token={token} />}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Goods refused at the door come back to whoever sent them. Nothing goes back into stock until they're checked:
+// some (or all) back in stock, the rest written off with a reason. Both are recorded on the blockchain.
+export function ReturnCheck({ s, token, base = 'farmer', onDone }) {
+  const [back,  setBack]  = useState(String(s.awaitingReturn));
+  const [notes, setNotes] = useState('');
+  const [busy,  setBusy]  = useState(false);
+  const [error, setError] = useState(null);
+  const b = toNum(back);
+  const off = b === null ? null : Math.round((s.awaitingReturn - b) * 1000) / 1000;
+  const bad = b === null || b < 0 || off < 0;
+  const submit = async () => {
+    setBusy(true); setError(null);
+    try {
+      await axios.post(`${API_BASE}/${base}/shipments/${s.shipmentId}/confirm-return`, { backInStock: b, notes }, { headers: { Authorization: `Bearer ${token}` } });
+      onDone?.();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Could not record it');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="border-2 border-orange-300 bg-orange-50 rounded-lg p-3 text-sm space-y-2">
+      <p className="text-gray-800">
+        ↩️ <strong>{s.toName}</strong> refused <strong>{formatQty(s.awaitingReturn, s.unit)}</strong> of {s.productName} (delivery #{s.shipmentId}
+        {s.deliveredAt ? `, ${new Date(s.deliveredAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : ''}).
+        {s.deliveryNotes && <span className="italic text-gray-600"> "{s.deliveryNotes}"</span>}
+      </p>
+      <p className="text-xs text-gray-600">When it's back with you, check it. Until then it isn't in your stock, so it can't be ordered or sent again.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="text-gray-700">Back in stock</label>
+        <input type="number" step="any" min="0" max={s.awaitingReturn} value={back} onChange={(e) => setBack(e.target.value)} disabled={busy}
+          className={`w-24 px-2 py-1 border rounded ${bad ? 'border-red-500' : 'border-gray-300'}`} />
+        <span className="text-gray-500">{s.unit}</span>
+        {off > 0 && <span className="text-orange-800 font-semibold">· write off {formatQty(off, s.unit)}</span>}
+        <button type="button" onClick={() => setBack('0')} className="text-xs text-gray-600 hover:underline" disabled={busy}>Write it all off</button>
+      </div>
+      {off > 0 && (
+        <input value={notes} maxLength={280} onChange={(e) => setNotes(e.target.value)} disabled={busy}
+          placeholder="Why is it written off? e.g. damaged in transit, out of temperature *"
+          className="w-full px-2 py-1.5 border border-gray-300 rounded" />
+      )}
+      {error && <p className="text-xs text-red-600">⚠️ {error}</p>}
+      <button onClick={submit} disabled={busy || bad || (off > 0 && !notes.trim())}
+        className="bg-orange-600 text-white text-sm font-semibold px-4 py-1.5 rounded-lg hover:bg-orange-700 disabled:bg-gray-400">
+        {busy ? '⛓️ Recording…' : off > 0 ? (b > 0 ? `✔ ${formatQty(b, s.unit)} back in stock, write off ${formatQty(off, s.unit)}` : `✔ Write off ${formatQty(off, s.unit)}`) : `✔ All ${formatQty(b, s.unit)} back in stock`}
+      </button>
+    </div>
+  );
+}
+
+// "Send frozen": the date it was frozen goes on the delivery record and the agreed terms
+export function FrozenChoice({ value, onChange, wanted, disabled }) {
+  const v = value || { on: !!wanted, date: new Date().toISOString().slice(0, 10) };
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-sm">
+      <label className="flex items-center gap-1.5 cursor-pointer">
+        <input type="checkbox" checked={v.on} disabled={disabled} onChange={(e) => onChange({ ...v, on: e.target.checked })} />
+        <span>❄️ Send frozen</span>
+      </label>
+      {v.on && <>
+        <span className="text-gray-500">frozen on</span>
+        <input type="date" value={v.date} max={new Date().toISOString().slice(0, 10)} disabled={disabled} onChange={(e) => onChange({ ...v, date: e.target.value })}
+          className="px-2 py-1 border border-gray-300 rounded" />
+      </>}
+      {wanted && !v.on && <span className="text-xs text-amber-700">The café asked for it frozen</span>}
+    </div>
+  );
+}
+export const frozenBody = (v, wanted) => {
+  const x = v || { on: !!wanted, date: new Date().toISOString().slice(0, 10) };
+  return x.on ? { frozen: true, frozenOn: x.date } : {};
+};
+
 export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 }) {
   const [orders,  setOrders]  = useState([]);
   const [loading, setLoading] = useState(true);
@@ -147,6 +248,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
   const [via,     setVia]     = useState({});     // orderId → depot / courier address ('' = direct)
   const [fee,     setFee]     = useState({});     // orderId → delivery charge (£)
   const [rest,    setRest]    = useState({});     // orderId → { close, note } when sending only part
+  const [frz,     setFrz]     = useState({});     // orderId → { on, date } — meat sent frozen
   const [carriers, setCarriers] = useState([]);   // registered depots / couriers
   const auth = { headers: { Authorization: `Bearer ${farmerToken}` } };
 
@@ -196,7 +298,8 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
       <h3 className="text-xl font-bold text-gray-800 mb-1">🧾 Orders {open.length > 0 && <span className="text-sm bg-yellow-400 text-yellow-900 rounded-full px-2 py-0.5 ml-1">{open.length} new</span>}</h3>
-      <p className="text-sm text-gray-500 mb-4">Restaurants order your products. Dispatching records the shipment on the blockchain. Meat orders are sent by the abattoir holding the cuts.</p>
+      <p className="text-sm text-gray-500 mb-4">Restaurants order your products. Dispatching records the shipment on the blockchain. Meat orders are sent by whoever holds the cuts.
+        Stock stays in your batches until you send it, but what's still to send on open orders is <strong>held</strong> for them, so no other café can order it. Closing the rest frees it again.</p>
 
       {error && <p className="text-sm text-red-600 mb-3">⚠️ {error}</p>}
 
@@ -222,8 +325,10 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                 <div className="flex justify-between items-start gap-3 flex-wrap">
                   <div>
                     <p className="font-bold text-gray-800">{o.restaurantName}</p>
-                    <p className="text-sm text-gray-700">wants <strong>{formatQty(o.quantity, o.unit)}</strong> of {o.productName} {o.preOrder && <span className="text-xs font-semibold bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded">pre-order</span>}</p>
+                    <p className="text-sm text-gray-700">wants <strong>{formatQty(o.quantity, o.unit)}</strong> of {o.productName} {o.preOrder && <span className="text-xs font-semibold bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded">pre-order</span>}
+                      {o.frozen && <span className="ml-1 text-xs font-semibold bg-sky-100 text-sky-800 px-1.5 py-0.5 rounded">❄️ frozen please</span>}</p>
                     <SentSoFar o={o} />
+                    <DeliveryResults o={o} token={farmerToken} />
                     {o.neededUntil && <p className="text-xs text-gray-600">Needed by {day(o.neededUntil)}</p>}
                     {o.note && <p className="text-sm text-gray-600 italic mt-1">"{o.note}"</p>}
                     {o.unitPrice != null && <p className="text-xs text-gray-700 mt-1">💷 {gbp(o.unitPrice)}/{o.unit} from your meat list ≈ {gbp(o.unitPrice * o.quantity)}</p>}
@@ -249,6 +354,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                       </div>
                     ))}
                     <RestChoice left={o.outstanding} sending={sendQty} unit={o.unit} value={rest[o.id]} onChange={(v) => setRest({ ...rest, [o.id]: v })} />
+                    <div className="mt-2"><FrozenChoice value={frz[o.id]} wanted={o.frozen} disabled={busyId === o.id} onChange={(v) => setFrz({ ...frz, [o.id]: v })} /></div>
                     <div className="flex gap-2 mt-2 flex-wrap items-center text-sm">
                       <select value={via[o.id] || ''} onChange={(e) => setVia({ ...via, [o.id]: e.target.value })} disabled={busyId === o.id}
                         className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
@@ -265,7 +371,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                     <button
                       onClick={() => act(o, 'dispatch', {
                         allocations: plan.map(a => ({ shipmentId: a.shipmentId, quantity: toNum(a.quantity), unitPrice: toNum(a.unitPrice) ?? undefined })),
-                        via: via[o.id] || undefined, deliveryFee: toNum(fee[o.id]) ?? undefined, ...restBody(o, sendQty),
+                        via: via[o.id] || undefined, deliveryFee: toNum(fee[o.id]) ?? undefined, ...restBody(o, sendQty), ...frozenBody(frz[o.id], o.frozen),
                       })}
                       disabled={busyId === o.id || !approved || !plan.length || !(sendQty > 0)}
                       className="mt-2 bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
@@ -309,6 +415,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                     wants <strong>{formatQty(o.quantity, o.unit)}</strong> of {o.productName}{o.isDeal ? ' 🏷️ (your short-date deal)' : ''}
                   </p>
                   <SentSoFar o={o} />
+                  <DeliveryResults o={o} token={farmerToken} />
                   {o.neededUntil && <p className="text-xs text-gray-600">Needs to last until {day(o.neededUntil)}</p>}
                   {o.note && <p className="text-sm text-gray-600 italic mt-1">"{o.note}"</p>}
                 </div>
@@ -378,16 +485,18 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
           })}
 
           {done.map(o => (
-            <div key={o.id} className="border border-gray-200 rounded-lg p-4 flex justify-between items-start gap-3 flex-wrap">
-              <div>
+            <div key={o.id} className="border border-gray-200 rounded-lg p-4 flex justify-between items-start gap-3">
+              <div className="flex-1 min-w-0">
                 <p className="font-semibold text-gray-800">{o.restaurantName} · {formatQty(o.quantitySent ?? o.quantity, o.unit)} {o.productName}</p>
                 {o.status === 'closed_short' && (
                   <p className="text-xs text-gray-700">Ordered {formatQty(o.quantity, o.unit)}, sent {formatQty(o.quantitySent || 0, o.unit)}. Rest closed{o.farmerNote ? `: "${o.farmerNote}"` : ''}</p>
                 )}
                 {o.isMeat && o.sentByName && <p className="text-xs text-gray-600">🔪 Sent by {o.sentByName}</p>}
-                <p className="font-mono text-xs text-gray-500">
-                  {o.dispatches?.length ? o.dispatches.map(d => `${d.batchId} (#${d.shipmentId})`).join(' + ') : `${o.batchId || ''}${o.shipmentId ? ` · shipment #${o.shipmentId}` : ''}`}
+                {o.note && <p className="text-xs text-gray-500 italic">Order note: "{o.note}"</p>}
+                <p className="font-mono text-xs text-gray-400">
+                  {o.dispatches?.length ? o.dispatches.map(d => d.batchId).join(' + ') : `${o.batchId || ''}${o.shipmentId ? ` · shipment #${o.shipmentId}` : ''}`}
                 </p>
+                <DeliveryResults o={o} token={farmerToken} />
                 {o.total != null && (
                   <p className="text-xs text-gray-700 mt-1">
                     💷 {o.unitPrice != null && <>{gbp(o.unitPrice)}/{o.unit}</>}
@@ -397,7 +506,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                 )}
                 <TermsCheck order={o} token={farmerToken} />
               </div>
-              <div className="text-right space-y-1">
+              <div className="text-right space-y-1 shrink-0">
                 {/* Once the restaurant confirms, show "Delivered" instead of "Dispatched" */}
                 <Badge status={o.status === 'dispatched' && o.shipmentStatus === 'delivered' ? 'delivered' : o.status} />
                 {(o.status === 'dispatched' || o.status === 'closed_short') && (
@@ -678,11 +787,18 @@ export function FarmerShipments({ farmerToken, refreshKey = 0, onChanged }) {
   };
 
   if (shipments.length === 0) return null;
+  const comingBack = shipments.filter(s => s.awaitingReturn > 0);
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
       <h3 className="text-xl font-bold text-gray-800 mb-4">🚚 Shipments sent</h3>
       {error && <p className="text-sm text-red-600 mb-3">⚠️ {error}</p>}
+      {comingBack.length > 0 && (
+        <div className="mb-4 space-y-2">
+          <p className="text-sm font-bold text-orange-800">↩️ Refused, coming back to you ({comingBack.length}): check {comingBack.length === 1 ? 'it' : 'them'} in</p>
+          {comingBack.map(s => <ReturnCheck key={s.shipmentId} s={s} token={farmerToken} onDone={() => { load(); onChanged?.(); }} />)}
+        </div>
+      )}
       <div className="divide-y divide-gray-100">
         {shipments.map(s => (
           <div key={s.shipmentId} className="py-3 flex justify-between gap-3 flex-wrap">
@@ -704,14 +820,19 @@ export function FarmerShipments({ farmerToken, refreshKey = 0, onChanged }) {
               <p className="font-mono text-xs text-gray-500">{s.batchId}</p>
               {s.status === 'delivered' && (
                 <p className={`text-xs mt-1 ${s.shortfall > 0 ? 'text-orange-600 font-semibold' : 'text-gray-500'}`}>
-                  Received {formatQty(s.quantityReceived, s.unit)}{s.quantityRejected > 0 ? ` · ↩️ ${formatQty(s.quantityRejected, s.unit)} refused (back in your stock)` : ''}{s.shortfall > 0 ? ` · ⚠️ ${formatQty(s.shortfall, s.unit)} missing` : ''}
+                  Received {formatQty(s.quantityReceived, s.unit)}{s.quantityRejected > 0 ? ` · ↩️ ${formatQty(s.quantityRejected, s.unit)} refused ${
+                    s.awaitingReturn > 0 ? '(coming back: check it in above)'
+                    : s.returnChecked ? `(checked: ${[s.returnChecked.backInStock > 0 && `${formatQty(s.returnChecked.backInStock, s.unit)} back in stock`, s.returnChecked.writtenOff > 0 && `${formatQty(s.returnChecked.writtenOff, s.unit)} written off`].filter(Boolean).join(', ')})`
+                    : '(back in your stock)'}` : ''}{s.shortfall > 0 ? ` · ⚠️ ${formatQty(s.shortfall, s.unit)} missing` : ''}
                 </p>
               )}
               {s.status === 'delivered' && s.carrierName && !s.carrierSteps?.out && (
                 <p className="text-xs text-amber-700 mt-1">⚠️ {s.carrierName} didn't log "Out for delivery"</p>
               )}
+              {s.frozenOn && <p className="text-xs text-sky-700">❄️ Sent frozen (frozen on {new Date(s.frozenOn).toLocaleDateString('en-GB')})</p>}
+              {s.returnChecked?.notes && <p className="text-xs text-gray-600">Return note: "{s.returnChecked.notes}" <TxLink hash={s.returnChecked.txHash} label="Checked" className="ml-1" /></p>}
               {s.deliveryNotes && (
-                <p className="text-xs text-gray-600 italic mt-1">{s.toName}: "{s.deliveryNotes}"</p>
+                <p className="text-xs text-gray-600 italic mt-1">💬 {s.toName}: "{s.deliveryNotes}"</p>
               )}
               {s.hasDeliveryPhoto && <DeliveryPhotoButton shipmentId={s.shipmentId} token={farmerToken} />}
               {s.productType === 'Livestock' && !(s.status === 'delivered' && s.quantityReceived === 0) && s.status !== 'cancelled' && (s.fciProvided

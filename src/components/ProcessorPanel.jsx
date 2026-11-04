@@ -9,6 +9,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { API_BASE, EXPLORER, formatQty, metaMaskSign, walletSignIn, walletError } from './walletHelpers';
 import { TxLink, ChainHelp } from './ChainProof';
+import { ReturnCheck, FrozenChoice, frozenBody } from './FarmerSupply';
 
 const TEMPLATE = [
   'animal,head,kill_number,kill_date,cold_weight_kg,category,conformation,fat_class,status,notes',
@@ -180,6 +181,13 @@ export default function ProcessorPanel({ account, participants }) {
       {error && <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-red-700 text-sm font-semibold">⚠️ {error}</div>}
       {message && <div className="bg-green-50 border border-green-300 rounded-lg p-3 text-green-700 text-sm font-semibold">✅ {message}</div>}
 
+      {data.refusedComingBack?.length > 0 && (
+        <div className="bg-white rounded-lg shadow-lg p-6 space-y-2">
+          <h3 className="text-lg font-bold text-orange-800">↩️ Refused by a café, coming back to you ({data.refusedComingBack.length})</h3>
+          <p className="text-sm text-gray-500">Check each one when it's back: put it back in stock, or write it off with a reason. Until then it isn't counted as stock.</p>
+          {data.refusedComingBack.map(s => <ReturnCheck key={s.shipmentId} s={s} token={token} base="processor" onDone={load} />)}
+        </div>
+      )}
       <AnimalsIn data={data} auth={auth} busy={busy} post={post} />
       <KillSheet post={post} busy={busy} waiting={data.animalsHere} />
       <MadeHere data={data} post={post} postMany={postMany} busy={busy} participants={participants} />
@@ -245,7 +253,7 @@ function AnimalsIn({ data, auth, busy, post }) {
     const notes = `Refused: ${refusing.reason}${refusing.notes.trim() ? ` — ${refusing.notes.trim()}` : ''}`;
     const r = await post(`x${s.shipmentId}`, `/processor/shipments/${s.shipmentId}/receive`,
       { quantityReceived: s.quantitySent - n, quantityRejected: n, notes },
-      n === s.quantitySent ? `Refused ${n} head — they go back on ${s.fromName}'s count` : `${s.quantitySent - n} accepted, ${n} refused`);
+      n === s.quantitySent ? `Refused ${n} head. ${s.fromName} confirms when they're back home` : `${s.quantitySent - n} accepted, ${n} refused`);
     if (r) setRefusing(null);
   };
 
@@ -1018,7 +1026,7 @@ function OrdersToSend({ data, post, busy, participants }) {
   const sendable = (o) => o.suggestion.allocations.length > 0;
   const ready = data.orders.filter(o => o.ready || openId === o.id);
   const waiting = data.orders.filter(o => !o.ready && openId !== o.id);
-  const f = (id) => form[id] || { via: '', notes: '', qty: {}, close: false, note: '' };
+  const f = (id) => form[id] || { via: '', notes: '', qty: {}, close: false, note: '', frozen: null };
   const setF = (id, patch) => setForm({ ...form, [id]: { ...f(id), ...patch } });
   const gbp = (v) => `£${Number(v).toFixed(2)}`;
   const sentLine = (o) => (o.quantitySent > 0 ? ` · ${formatQty(o.quantitySent, o.unit)} of ${formatQty(o.quantity, o.unit)} already sent` : '');
@@ -1047,7 +1055,8 @@ function OrdersToSend({ data, post, busy, participants }) {
               <div key={o.id} className="border-2 border-green-200 bg-green-50 rounded-lg p-3 space-y-2">
                 <div className="flex justify-between gap-2 flex-wrap">
                   <div>
-                    <p className="font-semibold text-gray-800">{formatQty(left, o.unit)} {o.productName} → {o.restaurantName}</p>
+                    <p className="font-semibold text-gray-800">{formatQty(left, o.unit)} {o.productName} → {o.restaurantName}
+                      {o.frozen && <span className="ml-2 text-xs font-semibold bg-sky-100 text-sky-800 px-1.5 py-0.5 rounded">❄️ frozen please</span>}</p>
                     <p className="text-xs text-gray-600">
                       {o.farmName}'s meat{o.preOrder ? ' · pre-order' : ''}{o.neededUntil ? ` · needed by ${ukDate(o.neededUntil)}` : ''} · ordered {ukDate(o.createdAt)}{sentLine(o)}
                     </p>
@@ -1078,6 +1087,7 @@ function OrdersToSend({ data, post, busy, participants }) {
                       className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm" />}
                   </div>
                 )}
+                <FrozenChoice value={F.frozen} wanted={o.frozen} disabled={busy !== null} onChange={(v) => setF(o.id, { frozen: v })} />
                 <div className="flex gap-2 flex-wrap items-center">
                   <select value={F.via} onChange={(e) => setF(o.id, { via: e.target.value })} className="px-2 py-1.5 border border-gray-300 rounded bg-white text-sm">
                     <option value="">Direct (own delivery)</option>
@@ -1090,6 +1100,7 @@ function OrdersToSend({ data, post, busy, participants }) {
                       allocations: o.suggestion.allocations.filter(a => qtyOf(a) > 0).map(a => ({ batchId: a.batchId, quantity: qtyOf(a) })),
                       via: F.via || undefined, notes: F.notes,
                       ...(sending < left && F.close ? { closeRest: true, shortNote: F.note || undefined } : {}),
+                      ...frozenBody(F.frozen, o.frozen),
                     }, (d) => d.status === 'part_sent' ? `${formatQty(sending, o.unit)} sent to ${o.restaurantName}; ${formatQty(d.outstanding, o.unit)} kept open`
                       : d.status === 'closed_short' ? `${formatQty(sending, o.unit)} sent; the rest closed` : `${o.productName} sent to ${o.restaurantName}`);
                     if (r) { setForm({ ...form, [o.id]: undefined }); setOpenId(null); }
@@ -1115,7 +1126,7 @@ function OrdersToSend({ data, post, busy, participants }) {
               return (
                 <div key={o.id} className="px-3 py-2 text-sm space-y-1">
                   <div className="flex justify-between gap-2 flex-wrap">
-                    <span><strong>{o.productName}</strong> {formatQty(left, o.unit)} for {o.restaurantName} <span className="text-gray-500">· {o.farmName}{o.neededUntil ? ` · by ${ukDate(o.neededUntil)}` : ''}{sentLine(o)}</span></span>
+                    <span><strong>{o.productName}</strong> {formatQty(left, o.unit)} for {o.restaurantName}{o.frozen ? ' ❄️' : ''} <span className="text-gray-500">· {o.farmName}{o.neededUntil ? ` · by ${ukDate(o.neededUntil)}` : ''}{sentLine(o)}</span></span>
                     <span className="text-xs text-gray-500">
                       {[have > 0 && `${formatQty(have, o.unit)} ready here`, o.atFarm > 0 && `${formatQty(o.atFarm, o.unit)} at the farm (they can send it)`,
                         o.toCut > 0 && `${formatQty(o.toCut, o.unit)} still to cut`].filter(Boolean).join(' · ') || (o.preOrder ? 'pre-order: cut it next time' : 'none ready')}
