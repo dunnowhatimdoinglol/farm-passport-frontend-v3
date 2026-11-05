@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import AchievementsTab from './AchievementsTab';
 import BadgeCard from './BadgeCard';
+import Maru from './Maru';
 
 function UserProfile({ authToken, onBack }) {
   const [profile, setProfile] = useState(null);
@@ -348,6 +349,10 @@ function UserProfile({ authToken, onBack }) {
         {activeTab === 'badges' ? (
           // Badge Collection Tab
           <>
+            {/* v4.4b: Maru keeps an eye on the collection (tap him to say hello) */}
+            <div className="flex justify-center mt-8 mb-4">
+              <Maru mode="sit" size={110} say={badges.length ? `${badges.length} ${badges.length === 1 ? 'badge' : 'badges'}! Nice work!` : 'Scan a receipt and I’ll bring you a medal!'} />
+            </div>
             {badges.length === 0 ? (
               <div className="text-center py-12">
                 <div className="text-6xl mb-4">🌱</div>
