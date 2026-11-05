@@ -193,6 +193,37 @@ export function RestChoice({ left, sending, unit, value, onChange }) {
     </div>
   );
 }
+// v4.4b — the extras when sending an order, always on show so nothing's missed in a rush
+function SendExtras({ o, disabled, carriers, fee, setFee, myRef, setMyRef, via, setVia, note, setNote }) {
+  return (
+    <div className="mt-3 pt-3 border-t border-gray-100 grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
+      <label className="block">
+        <span className="block text-xs font-semibold text-gray-600 mb-1">🚚 Delivery charge</span>
+        <span className="flex items-center gap-1"><span className="text-gray-500">£</span>
+          <input type="number" step="0.01" min="0" value={fee ?? ''} onChange={(e) => setFee(e.target.value)} disabled={disabled}
+            placeholder="0.00 (none)" className="w-full px-3 py-2 border border-gray-300 rounded-lg" /></span>
+      </label>
+      <label className="block">
+        <span className="block text-xs font-semibold text-gray-600 mb-1">🏷️ Your ref <span className="font-normal text-gray-400">(e.g. invoice no.)</span></span>
+        <RefInput value={myRef} onChange={setMyRef} disabled={disabled} placeholder="Optional" className="w-full" />
+      </label>
+      <label className="block">
+        <span className="block text-xs font-semibold text-gray-600 mb-1">How it gets there</span>
+        <select value={via || ''} onChange={(e) => setVia(e.target.value)} disabled={disabled}
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white">
+          <option value="">Direct (own delivery)</option>
+          {carriers.map(c => <option key={c.address} value={c.address}>via {c.name}</option>)}
+        </select>
+      </label>
+      <label className="block sm:col-span-3">
+        <span className="block text-xs font-semibold text-gray-600 mb-1">💬 Note to {o.restaurantName} <span className="font-normal text-gray-400">(optional, only they see it)</span></span>
+        <input type="text" maxLength={500} value={note || ''} onChange={(e) => setNote(e.target.value)} disabled={disabled}
+          placeholder="e.g. Picked this morning · 2 crates, please return the empty ones" className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
+      </label>
+    </div>
+  );
+}
+
 // How each delivery of an order went: what the café accepted and refused, its note and delivery photo
 export function DeliveryResults({ o, token, onResolve, busy }) {
   const ds = (o.dispatches || []).filter(d => d.status && d.status !== 'cancelled');
@@ -213,6 +244,7 @@ export function DeliveryResults({ o, token, onResolve, busy }) {
             {' '}<TxLink hash={d.sentTxHash} label="Sent" className="ml-1" />{d.status === 'delivered' && <TxLink hash={d.receivedTxHash} label="Received" className="ml-2" />}
           </p>
           <Refs x={{ senderRef: d.senderRef, receiverRef: d.receiverRef }} />
+          {d.senderNote && <p className="text-gray-700">📝 Your note: "{d.senderNote}"</p>}
           {d.deliveryNotes && <p className="italic text-gray-700">💬 {o.restaurantName}: "{d.deliveryNotes}"</p>}
           {d.hasDeliveryPhoto && <DeliveryPhotoButton shipmentId={d.shipmentId} token={token} />}
           {d.missing > 0 && (
@@ -234,17 +266,38 @@ export function DeliveryResults({ o, token, onResolve, busy }) {
 }
 
 // v4.4 — email alert settings (farm, café, abattoir): instant alerts and the morning "Today" email
+const ALERT_LABELS = {
+  farm: {
+    new_order: ['New orders', 'A café orders from you'],
+    closed: ['Cancelled orders', 'A café cancels an order, or the rest of one'],
+    refused: ['Refused goods', 'A café turns some of a delivery away, so it’s coming back'],
+    coming_in: ['Coming in to you', 'Boxed meat from the abattoir, or goods sent back to you'],
+  },
+  cafe: {
+    sent: ['Order on its way', 'A farm sends your order, with the order no., your PO, their ref and note'],
+    closed: ['Order declined or closed', 'A farm can’t send an order, or the rest of one'],
+  },
+  abattoir: {
+    coming_in: ['Animals on the way', 'A farm sends animals to you'],
+    new_order: ['Café orders to send', 'A café orders meat you’re holding'],
+    refused: ['Refused cuts', 'A café turns some away, so it’s coming back'],
+  },
+};
 export function AlertSettings({ token, className = '' }) {
   const [p, setP] = useState(null);
   const [saved, setSaved] = useState(false);
   const auth = { headers: { Authorization: `Bearer ${token}` } };
   useEffect(() => { axios.get(`${API_BASE}/alerts/prefs`, auth).then(r => setP(r.data)).catch(() => setP({ error: true })); }, [token]);
   const save = async (next) => {
-    setP({ ...p, ...next }); setSaved(false);
-    try { await axios.put(`${API_BASE}/alerts/prefs`, { instant: next.instant ?? p.instant, daily: next.daily ?? p.daily }, auth); setSaved(true); }
-    catch (_) { setP(p); }
+    const before = p;
+    const merged = { ...p, ...next, types: { ...(p.types || {}), ...(next.types || {}) } };
+    setP(merged); setSaved(false);
+    try { await axios.put(`${API_BASE}/alerts/prefs`, { instant: merged.instant, daily: merged.daily, types: merged.types }, auth); setSaved(true); }
+    catch (_) { setP(before); }
   };
   if (!p || p.error) return null;
+  const labels = ALERT_LABELS[p.role] || {};
+  const kinds = (p.available || []).filter(k => labels[k]);
   return (
     <div className={`bg-white rounded-lg shadow-lg p-6 ${className}`}>
       <h3 className="text-lg font-bold text-gray-800">🔔 Email alerts</h3>
@@ -252,12 +305,24 @@ export function AlertSettings({ token, className = '' }) {
         : <p className="text-sm text-amber-800 mb-3">No email on file yet. Ask Farm Passport to add one so you get alerts.</p>}
       <label className="flex items-start gap-3 py-2 cursor-pointer">
         <input type="checkbox" className="mt-1 w-4 h-4" checked={p.instant} onChange={(e) => save({ instant: e.target.checked })} />
-        <span><span className="font-semibold text-gray-800">As things happen</span><span className="block text-sm text-gray-500">New orders, deliveries on their way, refused goods, approvals.</span></span>
+        <span><span className="font-semibold text-gray-800">As things happen</span><span className="block text-sm text-gray-500">{kinds.length ? 'Choose which ones:' : 'New orders, deliveries on their way, refused goods.'}</span></span>
       </label>
+      {kinds.length > 0 && (
+        <div className={`ml-7 mb-1 border-l-2 border-gray-100 pl-3 ${p.instant ? '' : 'opacity-50'}`}>
+          {kinds.map(k => (
+            <label key={k} className="flex items-start gap-3 py-1.5 cursor-pointer">
+              <input type="checkbox" className="mt-1 w-4 h-4" disabled={!p.instant} checked={p.types?.[k] !== false}
+                onChange={(e) => save({ types: { [k]: e.target.checked } })} />
+              <span><span className="text-sm font-semibold text-gray-800">{labels[k][0]}</span><span className="block text-xs text-gray-500">{labels[k][1]}</span></span>
+            </label>
+          ))}
+        </div>
+      )}
       <label className="flex items-start gap-3 py-2 cursor-pointer">
         <input type="checkbox" className="mt-1 w-4 h-4" checked={p.daily} onChange={(e) => save({ daily: e.target.checked })} />
         <span><span className="font-semibold text-gray-800">Morning summary</span><span className="block text-sm text-gray-500">One email first thing with what needs doing today. Only sent when there's something to do.</span></span>
       </label>
+      <p className="text-xs text-gray-400 mt-1">Account emails, like being approved, always come through.</p>
       {saved && <p className="text-xs text-green-700">✓ Saved</p>}
     </div>
   );
@@ -436,7 +501,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
   const [rest,    setRest]    = useState({});     // orderId → { close, note } when sending only part
   const [frz,     setFrz]     = useState({});     // orderId → { on, date } — meat sent frozen
   const [myRef,   setMyRef]   = useState({});     // orderId → the farm's own reference (invoice / delivery note no.)
-  const [more,    setMore]    = useState({});     // orderId → showing "More options" (batches, prices, delivery, ref) — v4.4
+  const [sendNote, setSendNote] = useState({});   // orderId → a note to the café with this delivery (private) — v4.4b
   const [carriers, setCarriers] = useState([]);   // registered depots / couriers
   const auth = { headers: { Authorization: `Bearer ${farmerToken}` } };
 
@@ -450,7 +515,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
     try {
       const res = await axios.get(`${API_BASE}/farmer/orders`, auth);
       setOrders(res.data.orders || []);
-      setAlloc({});
+      setAlloc({}); setSendNote({});
     } catch (err) {
       setError(err.response?.data?.error || 'Could not load orders');
     } finally {
@@ -548,28 +613,12 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                       </div>
                     ))}
                     <RestChoice left={o.outstanding} sending={sendQty} unit={o.unit} value={rest[o.id]} onChange={(v) => setRest({ ...rest, [o.id]: v })} />
-                    {/* v4.4: frozen shows when the café asked for it; courier, delivery charge and ref sit under "More options" */}
-                    {(o.frozen || more[o.id]) && <div className="mt-2"><FrozenChoice value={frz[o.id]} wanted={o.frozen} disabled={busyId === o.id} onChange={(v) => setFrz({ ...frz, [o.id]: v })} /></div>}
-                    {!more[o.id] && (
-                      <button type="button" onClick={() => setMore({ ...more, [o.id]: true })} className="mt-2 block text-xs text-gray-600 underline underline-offset-2 hover:text-gray-900">
-                        More options: {o.frozen ? '' : 'send frozen, '}delivery charge, courier, your ref ▾</button>
-                    )}
-                    {more[o.id] && (<>
-                    <div className="mt-2 flex flex-wrap gap-3 items-center">
-                      <RefInput value={myRef[o.id]} onChange={(v) => setMyRef({ ...myRef, [o.id]: v })} disabled={busyId === o.id} className="flex-1 min-w-[12rem]" />
-                      <button type="button" onClick={() => setMore({ ...more, [o.id]: false })} className="text-xs text-gray-500 hover:underline">Fewer options ▴</button>
-                    </div>
-                    <div className="flex gap-2 mt-2 flex-wrap items-center text-sm">
-                      <select value={via[o.id] || ''} onChange={(e) => setVia({ ...via, [o.id]: e.target.value })} disabled={busyId === o.id}
-                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
-                        <option value="">Direct (own delivery)</option>
-                        {carriers.map(c => <option key={c.address} value={c.address}>via {c.name}</option>)}
-                      </select>
-                      <label className="text-gray-600 ml-2">🚚 Delivery £</label>
-                      <input type="number" step="0.01" min="0" value={fee[o.id] ?? ''} onChange={(e) => setFee({ ...fee, [o.id]: e.target.value })}
-                        placeholder="0.00" className="w-24 px-3 py-2 border border-gray-300 rounded-lg" disabled={busyId === o.id} />
-                    </div>
-                    </>)}
+                    <div className="mt-2"><FrozenChoice value={frz[o.id]} wanted={o.frozen} disabled={busyId === o.id} onChange={(v) => setFrz({ ...frz, [o.id]: v })} /></div>
+                    <SendExtras o={o} disabled={busyId === o.id} carriers={carriers}
+                      fee={fee[o.id]} setFee={(v) => setFee({ ...fee, [o.id]: v })}
+                      myRef={myRef[o.id]} setMyRef={(v) => setMyRef({ ...myRef, [o.id]: v })}
+                      via={via[o.id]} setVia={(v) => setVia({ ...via, [o.id]: v })}
+                      note={sendNote[o.id]} setNote={(v) => setSendNote({ ...sendNote, [o.id]: v })} />
                     <p className="mt-2 text-sm font-semibold text-gray-800">
                       {formatQty(sendQty, o.unit)} · {total != null ? <>Total {gbp(total)}</> : <span className="text-gray-400 font-normal">set prices to see the total</span>}
                     </p>
@@ -577,7 +626,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                       onClick={() => act(o, 'dispatch', {
                         allocations: plan.map(a => ({ shipmentId: a.shipmentId, quantity: toNum(a.quantity), unitPrice: toNum(a.unitPrice) ?? undefined })),
                         via: via[o.id] || undefined, deliveryFee: toNum(fee[o.id]) ?? undefined, ...restBody(o, sendQty), ...frozenBody(frz[o.id], o.frozen),
-                        senderRef: myRef[o.id] || undefined,
+                        senderRef: myRef[o.id] || undefined, cafeNote: (sendNote[o.id] || '').trim() || undefined,
                       })}
                       disabled={busyId === o.id || !approved || !plan.length || !(sendQty > 0)}
                       className="mt-2 bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
@@ -629,29 +678,14 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                 <Badge status={o.status} />
               </div>
 
-              {/* v4.4: a one-line summary; the batches, prices, delivery and ref only when "More options" is open */}
-              {!more[o.id] && (
-                <div className="mt-3 bg-white border border-yellow-200 rounded-lg p-3 text-sm">
-                  {plan.length === 0 ? <p className="text-red-600">Nothing left that matches this order.</p> : (
-                    <p className="text-gray-800">Send <strong>{formatQty(Math.round(sendQty * 1000) / 1000, o.unit)}</strong>
-                      {plan.length === 1 ? <> from your batch with the soonest use-by ({day(plan[0].useBy)})</> : <> from {plan.length} batches, soonest use-by first</>}
-                      {priced && plan.length ? <> at {[...new Set(plan.map(a => gbp(toNum(a.unitPrice))))].join(' / ')}/{o.unit}</> : null}
-                      {total != null ? <> · <strong>{gbp(total)}</strong></> : <span className="text-gray-400"> · no price set</span>}</p>
-                  )}
-                  {o.suggestion?.shortBy > 0 && <p className="text-xs text-amber-700 mt-1">⚠️ You're {formatQty(o.suggestion.shortBy, o.unit)} short. Send what you have now, then keep the rest open or close it.</p>}
-                  <button type="button" onClick={() => setMore({ ...more, [o.id]: true })} className="mt-1 text-xs text-gray-600 underline underline-offset-2 hover:text-gray-900">
-                    More options: change amounts or prices, delivery charge, courier, your ref ▾</button>
-                </div>
-              )}
-              {more[o.id] && (<>
+              {/* v4.4b: everything on show — batches and prices, then delivery charge, your ref, courier and a note to the café */}
               <div className="mt-3 bg-white border border-yellow-200 rounded-lg p-3">
-                <div className="flex justify-between items-center mb-2"><p className="text-xs font-semibold text-gray-700">Send from (soonest use-by first):</p>
-                  <button type="button" onClick={() => setMore({ ...more, [o.id]: false })} className="text-xs text-gray-500 hover:underline">Fewer options ▴</button></div>
+                <p className="text-xs font-semibold text-gray-700 mb-2">Send from (soonest use-by first):</p>
                 {plan.length === 0 && <p className="text-sm text-red-600">Nothing left that matches this order.</p>}
                 {plan.map((a, i) => (
                   <div key={a.batchId} className="flex gap-2 items-center flex-wrap text-sm mb-1">
                     <span className="font-mono text-xs text-gray-600 w-40 truncate" title={a.batchId}>{a.batchId}</span>
-                    <span className="text-xs text-gray-500 w-24">use by {day(a.useBy)}</span>
+                    <span className="text-xs text-gray-500 w-24">{a.useBy ? `use by ${day(a.useBy)}` : 'no use-by'}</span>
                     <input type="number" step="any" min="0" max={a.remaining} value={a.quantity}
                       onChange={(e) => setPlan(plan.map((x, j) => (j === i ? { ...x, quantity: e.target.value } : x)))}
                       className="w-20 px-2 py-1 border border-gray-300 rounded" disabled={busyId === o.id} />
@@ -666,23 +700,15 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                 ))}
                 {o.suggestion?.shortBy > 0 && <p className="text-xs text-amber-700 mt-1">⚠️ You're {formatQty(o.suggestion.shortBy, o.unit)} short. Send what you have now, then keep the rest open or close it.</p>}
                 {plan.length > 1 && <p className="text-xs text-gray-500 mt-1">Goes as {plan.length} deliveries, one per batch, each recorded on-chain.</p>}
+                <SendExtras o={o} disabled={busyId === o.id} carriers={carriers}
+                  fee={fee[o.id]} setFee={(v) => setFee({ ...fee, [o.id]: v })}
+                  myRef={myRef[o.id]} setMyRef={(v) => setMyRef({ ...myRef, [o.id]: v })}
+                  via={via[o.id]} setVia={(v) => setVia({ ...via, [o.id]: v })}
+                  note={sendNote[o.id]} setNote={(v) => setSendNote({ ...sendNote, [o.id]: v })} />
+                <p className="mt-2 text-sm font-semibold text-gray-800">
+                  {formatQty(Math.round(sendQty * 1000) / 1000, o.unit)} · {total != null ? <>Total {gbp(total)}{df > 0 ? <span className="font-normal text-gray-500"> (incl. {gbp(df)} delivery)</span> : null}</> : <span className="text-gray-400 font-normal">set prices to see the total</span>}
+                </p>
               </div>
-
-              <div className="flex gap-2 mt-2 flex-wrap items-center text-sm">
-                <select value={via[o.id] || ''} onChange={(e) => setVia({ ...via, [o.id]: e.target.value })} disabled={busyId === o.id}
-                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
-                  <option value="">Direct (own delivery)</option>
-                  {carriers.map(c => <option key={c.address} value={c.address}>via {c.name}</option>)}
-                </select>
-                <label className="text-gray-600 ml-2">🚚 Delivery £</label>
-                <input type="number" step="0.01" min="0" value={fee[o.id] ?? ''} onChange={(e) => setFee({ ...fee, [o.id]: e.target.value })}
-                  placeholder="0.00" className="w-24 px-3 py-2 border border-gray-300 rounded-lg" disabled={busyId === o.id} />
-                <RefInput value={myRef[o.id]} onChange={(v) => setMyRef({ ...myRef, [o.id]: v })} disabled={busyId === o.id} placeholder="Your ref (optional)" className="w-40" />
-                <span className="ml-2 font-semibold text-gray-800">
-                  {formatQty(Math.round(sendQty * 1000) / 1000, o.unit)} · {total != null ? <>Total {gbp(total)}</> : <span className="text-gray-400 font-normal">set prices to see the total</span>}
-                </span>
-              </div>
-              </>)}
               <RestChoice left={o.outstanding ?? o.quantity} sending={Math.round(sendQty * 1000) / 1000} unit={o.unit} value={rest[o.id]} onChange={(v) => setRest({ ...rest, [o.id]: v })} />
               <div className="flex gap-2 mt-3 flex-wrap items-center">
                 <button
@@ -692,6 +718,7 @@ export function FarmerOrders({ farmerToken, approved, onChanged, refreshKey = 0 
                     deliveryFee: toNum(fee[o.id]) ?? undefined,
                     ...restBody(o, Math.round(sendQty * 1000) / 1000),
                     senderRef: myRef[o.id] || undefined,
+                    cafeNote: (sendNote[o.id] || '').trim() || undefined,
                   })}
                   disabled={busyId === o.id || !approved || !plan.length || !(sendQty > 0)}
                   className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400"

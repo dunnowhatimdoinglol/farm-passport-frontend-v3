@@ -17,6 +17,7 @@ import VerifyEmail from './components/VerifyEmail';
 import Leaderboard from './components/Leaderboard';
 import SupplyChainPage from './components/SupplyChainPage';
 import AdminPage from './components/AdminPage';
+import Maru from './components/Maru';
 import HomePage from './components/HomePage';
 import LegalPage from './components/LegalPage';
 import { parseFarmLink } from './components/walletHelpers';
@@ -107,7 +108,18 @@ function App() {
         setCurrentBatchId(link.id);
         setCurrentView('farm');
       }
+    } else if (/^\/(farm|cafe)\/?$/.test(window.location.pathname)) {
+      // v4.4b: a button in an alert email, e.g. /farm?go=orders or /cafe?go=deliveries.
+      // The dashboard opens on that tab, after signing in if needed.
+      const go = params.get('go');
+      const farm = window.location.pathname.startsWith('/farm');
+      try { if (go) sessionStorage.setItem(farm ? 'fp_farm_tab' : 'fp_cafe_tab', go); } catch (_) { /* private window */ }
+      window.history.replaceState({}, '', '/');
+      setCurrentView(farm ? 'farmer' : 'restaurant');
     } else if (window.location.pathname.startsWith('/supply') || window.location.pathname.startsWith('/checkpoint')) {
+      // v4.4b: alert emails to abattoirs open a tab of their panel: /supply?go=orders
+      const go = params.get('go');
+      try { if (go) sessionStorage.setItem('fp_proc_tab', go); } catch (_) { /* private window */ }
       // Opened from an NFC sticker: /supply?shipment=12  (old /checkpoint?batch=... links still work)
       setCurrentView('supply');
     } else if (window.location.pathname.startsWith('/admin')) {
@@ -422,7 +434,8 @@ function App() {
         {showSuccessModal && successInfo && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-8 text-center animate-bounce-once overflow-y-auto max-h-screen">
-              <div className="text-7xl mb-4">🎉</div>
+              {/* v4.4b: Maru pops up and hands over the medal */}
+              <div className="flex justify-center mt-8 mb-2"><Maru mode="give" size={170} flyAway={2800} /></div>
               <h2 className="text-3xl font-bold text-gray-800 mb-2">Badge Unlocked!</h2>
               <p className="text-gray-600">
                 You've earned a badge from <strong>{successInfo.farmName}</strong>!

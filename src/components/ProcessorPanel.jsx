@@ -95,7 +95,9 @@ export default function ProcessorPanel({ account, participants }) {
   const [busy, setBusy] = useState(null);
   const auth = { headers: { Authorization: `Bearer ${token}` } };
   // v4.4: one section at a time (remembered for this browser tab)
-  const [ptab, setPtabState] = useState(() => { try { return sessionStorage.getItem('fp_proc_tab') || 'animals'; } catch { return 'animals'; } });
+  const [ptab, setPtabState] = useState(() => {
+    try { const t = sessionStorage.getItem('fp_proc_tab'); return ['animals', 'kill', 'stock', 'orders', 'settings'].includes(t) ? t : 'animals'; } catch { return 'animals'; }
+  });
   const setPtab = (t) => { setPtabState(t); try { sessionStorage.setItem('fp_proc_tab', t); } catch { /* fine */ } };
 
   const load = async () => {

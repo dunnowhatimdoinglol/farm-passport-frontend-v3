@@ -40,7 +40,11 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
 
   // v4.2 — one section at a time: a "Today" to-do page, then tabs. The open tab is remembered for this browser tab.
   const [tab, setTabState] = useState(() => {
-    try { const t = sessionStorage.getItem('fp_farm_tab') || 'today'; return t === 'batches' ? 'stock' : t; } catch { return 'today'; }
+    try {
+      const t = sessionStorage.getItem('fp_farm_tab') || 'today';
+      const k = t === 'batches' ? 'stock' : t;
+      return TABS.some(([x]) => x === k) ? k : 'today';   // v4.4b: email links can ask for a tab
+    } catch { return 'today'; }
   });
   // Stock tab filter (v4.3): all · produce · animals · boxed meat
   const [stockFilter, setStockFilter] = useState('all');
@@ -541,7 +545,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
 
       {tab === 'stock' && stockFilter !== 'meat' && (<>
       {/* Create Batch Button / Form */}
-      {!showCreateBatch ? (
+      {!showCreateBatch || !approved ? (
         <button
           onClick={() => setShowCreateBatch(true)}
           disabled={!approved}
@@ -611,13 +615,15 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
               No Batches Yet
             </h4>
             <p className="text-gray-600 mb-6">
-              Create your first batch to start tracking your products!
+              {approved ? 'Create your first batch to start tracking your products!'
+                : 'You can add batches as soon as your farm is approved. We’ll email you, usually within a day.'}
             </p>
             <button
-              onClick={() => setShowCreateBatch(true)}
-              className="bg-green-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-green-700 transition"
+              onClick={() => approved && setShowCreateBatch(true)}
+              disabled={!approved}
+              className="bg-green-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-green-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed"
             >
-              Create First Batch
+              {approved ? 'Create First Batch' : '🔒 Waiting for approval'}
             </button>
           </div>
         ) : (

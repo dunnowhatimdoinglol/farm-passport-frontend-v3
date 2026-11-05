@@ -133,7 +133,14 @@ function RestaurantPortal({ onBack, startOn = null }) {
 // ─────────────────────────────────────────────────────────
 function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBack }) {
   // ── Which tab is showing ──
-  const [tab, setTab] = useState('create');   // 'create' | 'order' | 'deliveries' | 'history'
+  // v4.4b: an alert email can ask for a tab (/cafe?go=deliveries) — used once, then forgotten
+  const [tab, setTab] = useState(() => {
+    try {
+      const t = sessionStorage.getItem('fp_cafe_tab');
+      sessionStorage.removeItem('fp_cafe_tab');
+      return ['create', 'order', 'deliveries', 'history'].includes(t) ? t : 'create';
+    } catch { return 'create'; }
+  });   // 'create' | 'order' | 'deliveries' | 'history'
   const [showAlerts, setShowAlerts] = useState(false);   // v4.4: email alert settings
 
   // ── Email verification + approval (checked live from the backend) ──
@@ -224,6 +231,7 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
   const [discType,  setDiscType]  = useState('amount');
   const [discValue, setDiscValue] = useState('');
   const [ownTotal,  setOwnTotal]  = useState(null);  // a total typed by hand (null = worked out)
+  const [billName,  setBillName]  = useState('');    // v4.4b: table number, name or group (optional, kept private)
   const [submitting, setSubmitting] = useState(false);
   const [submitErr,  setSubmitErr]  = useState(null);
   const [createdReceipt, setCreatedReceipt] = useState(null);
@@ -272,6 +280,7 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
         ],
         discount: discValue !== '' && Number(discValue) > 0 ? { type: discType, value: Number(discValue) } : undefined,
         total: ownTotal !== null && ownTotal !== '' ? Number(ownTotal) : undefined,
+        billName: billName.trim() || undefined,
       }, authHeader);   // restaurant name comes from the login on the backend
       setCreatedReceipt(res.data.receipt);
       fetchDishes();
@@ -288,7 +297,7 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
   const handleCreateAnother = () => {
     setCreatedReceipt(null);
     setCounts({}); setExtras([]); setExtra(null);
-    setDiscValue(''); setOwnTotal(null); setSubmitErr(null);
+    setDiscValue(''); setOwnTotal(null); setSubmitErr(null); setBillName('');
     fetchStock(); fetchDishes();
   };
 
@@ -418,7 +427,7 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
         </div>
 
         <div className="bg-green-50 border-2 border-green-200 rounded-lg p-6">
-          <h3 className="text-lg font-bold text-gray-800 mb-3">📋 The bill</h3>
+          <h3 className="text-lg font-bold text-gray-800 mb-3">📋 The bill{r.billName ? <span className="font-semibold text-gray-600"> · {r.billName}</span> : null}</h3>
           <div className="divide-y divide-green-100">
             {(r.lines || []).map((l, i) => (
               <div key={i} className="py-1.5 flex justify-between text-sm">
@@ -437,7 +446,7 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
         </div>
 
         <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-4 text-center space-y-2">
-          <button onClick={() => printQrSlip({ title: restaurantUser.restaurantName, subtitle: 'Scan to see where your meal came from and collect a farm badge', url: receiptLink(r.receiptId) })}
+          <button onClick={() => printQrSlip({ title: `${restaurantUser.restaurantName}${r.billName ? ` · ${r.billName}` : ''}`, subtitle: 'Scan to see where your meal came from and collect a farm badge', url: receiptLink(r.receiptId) })}
             className="bg-gray-800 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-gray-900">🖨️ Print the QR slip</button>
           <p className="text-yellow-800 text-xs">Hand it over with the bill, or show this screen for the customer to scan.</p>
         </div>
@@ -550,7 +559,12 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
             {/* The bill */}
             {allLines.length > 0 && (
               <div className="border-2 border-orange-200 rounded-lg p-4">
-                <p className="text-sm font-semibold text-gray-700 mb-2">🧾 Bill</p>
+                <div className="flex items-center gap-2 mb-2 flex-wrap">
+                  <p className="text-sm font-semibold text-gray-700">🧾 Bill</p>
+                  <input value={billName} maxLength={40} onChange={(e) => setBillName(e.target.value)}
+                    placeholder="Table, name or group (optional)" aria-label="Name on the bill"
+                    className="flex-1 min-w-[10rem] px-2 py-1 border border-gray-300 rounded text-sm" />
+                </div>
                 {allLines.map(l => (
                   <div key={l.key} className="flex justify-between text-sm py-0.5">
                     <span>
@@ -663,18 +677,25 @@ function OrderStock({ authHeader, approved }) {
 
   const deal = pick.startsWith('deal:') ? deals.find(d => `deal:${d.batchId}` === pick) : null;
   const product = !deal ? products.find(p => p.key === pick) : null;
-  const max = deal ? deal.remaining : product?.available;
+  // v4.4b: with a "needs to last until" date, only batches whose use-by reaches it count
+  const lastingQty = product && until && product.lots
+    ? Math.max(0, Math.round((product.lots.filter(l => !l.useBy || l.useBy.slice(0, 10) >= until).reduce((n, l) => n + Number(l.quantity), 0) - (product.reserved || 0)) * 1000) / 1000)
+    : null;
+  const latestUseBy = product?.lots?.length && product.lots.every(l => l.useBy) ? product.lots.map(l => l.useBy).sort().pop() : null;
+  const max = deal ? deal.remaining : lastingQty !== null ? Math.min(lastingQty, product.available) : product?.available;
   const unit = deal?.unit || product?.unit || '';
   const price = deal ? deal.dealPrice : product?.pricePerUnit;
   const day = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 
   // What can be ordered, and why not more (stock held for other cafés' open orders)
   const heldNote = product?.reserved > 0 ? ` · ${formatQty(product.reserved, unit)} held for other orders` : '';
+  const untilNote = lastingQty !== null && lastingQty < product.available
+    ? ` that will last until ${day(until)}${latestUseBy && latestUseBy.slice(0, 10) < until ? ` · the latest use-by is ${day(latestUseBy)}` : ''}` : '';
   const tooMuch = Number(quantity) > 0 && max !== undefined && Number(quantity) > max;
 
   const submit = async (e) => {
     e.preventDefault();
-    if (tooMuch) { setError(`Only ${formatQty(max, unit)} available${heldNote ? ` (${heldNote.slice(3)})` : ''}`); return; }
+    if (tooMuch) { setError(untilNote && !(max > 0) ? `None of it will last until ${day(until)}. Try an earlier date, or another farm.` : `Only ${formatQty(max, unit)} available${untilNote}${heldNote ? ` (${heldNote.slice(3)})` : ''}`); return; }
     setBusy(true); setError(null); setMessage(null);
     try {
       const body = deal
@@ -693,20 +714,23 @@ function OrderStock({ authHeader, approved }) {
 
   // v4.4: small forms on the page instead of browser pop-ups
   const [poEdit, setPoEdit] = useState(null);       // { id, value }
-  const [asking, setAsking] = useState(null);       // { id, kind: 'cancel-rest' | 'again' }
+  const [asking, setAsking] = useState(null);       // { id, kind: 'cancel' | 'cancel-rest' | 'again', quantity?, po?, note? }
   const savePo = async () => {
     try { await axios.put(`${API_BASE}/restaurant/orders/${poEdit.id}/ref`, { poNumber: poEdit.value.trim() }, authHeader); setPoEdit(null); load(); }
     catch (err) { setError(err.response?.data?.error || 'Could not save the PO number'); }
   };
-  // "Order again": the same product, amount, PO and frozen choice from the same farm
-  const orderAgain = async (o) => {
+  // "Order again": the same product and frozen choice from the same farm; the amount, PO number and note can be changed first (v4.4b)
+  const orderAgain = async (o, form = {}) => {
     setError(null); setMessage(null);
+    const quantity = Number(form.quantity) > 0 ? Number(form.quantity) : o.quantity;
+    const poNumber = (form.po ?? o.poNumber ?? '').trim() || undefined;
+    const note = (form.note || '').trim() || undefined;
     try {
       await axios.post(`${API_BASE}/restaurant/orders`, o.isMeat
-        ? { meat: true, farmerAddress: o.farmerAddress, productName: o.productName, species: o.species || undefined, quantity: o.quantity, frozen: o.frozen || undefined, poNumber: o.poNumber || undefined }
-        : { farmerAddress: o.farmerAddress, productName: o.productName, unit: o.unit, quantity: o.quantity, poNumber: o.poNumber || undefined }, authHeader);
+        ? { meat: true, farmerAddress: o.farmerAddress, productName: o.productName, species: o.species || undefined, quantity, frozen: o.frozen || undefined, poNumber, note }
+        : { farmerAddress: o.farmerAddress, productName: o.productName, unit: o.unit, quantity, poNumber, note }, authHeader);
       setAsking(null);
-      setMessage(`Ordered ${formatQty(o.quantity, o.unit)} ${o.productName} from ${o.farmName} again.`);
+      setMessage(`Ordered ${formatQty(quantity, o.unit)} ${o.productName} from ${o.farmName} again.`);
       load();
     } catch (err) {
       setAsking(null);
@@ -810,7 +834,8 @@ function OrderStock({ authHeader, approved }) {
               </div>
               {max !== undefined && (
                 <p className={`text-xs mt-1 ${tooMuch ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
-                  {tooMuch ? `Only ${formatQty(max, unit)} available` : `${formatQty(max, unit)} available`}{heldNote}
+                  {untilNote && !(max > 0) ? `None of it will last until ${day(until)}${untilNote.includes('latest') ? untilNote.slice(untilNote.indexOf(' · ')) : ''}`
+                    : <>{tooMuch ? `Only ${formatQty(max, unit)} available` : `${formatQty(max, unit)} available`}{untilNote}{heldNote}</>}
                 </p>
               )}
             </div>
@@ -892,7 +917,7 @@ function OrderStock({ authHeader, approved }) {
                       <input autoFocus value={poEdit.value} maxLength={40} onChange={(e) => setPoEdit({ ...poEdit, value: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && savePo()}
                         placeholder="Your PO number" className="px-2 py-1 border border-gray-300 rounded text-xs w-40" />
                       <button onClick={savePo} className="text-xs font-semibold text-white bg-orange-600 px-2 py-1 rounded">Save</button>
-                      <button onClick={() => setPoEdit(null)} className="text-xs text-gray-500 hover:underline">Cancel</button>
+                      <button onClick={() => setPoEdit(null)} className="text-xs text-gray-500 hover:underline">Don't change</button>
                     </div>
                   )}
                   {o.isMeat && o.status === 'requested' && <p className="text-xs text-gray-600">{o.preOrder ? '📋 Pre-order: sent once your cuts are ready' : '🔪 Ready: the farm or its abattoir sends it to you'}</p>}
@@ -924,8 +949,27 @@ function OrderStock({ authHeader, approved }) {
                     <p key={d.shipmentId} className="text-xs text-amber-800">⚠️ {formatQty(d.missing, o.unit)} didn't arrive (delivery #{d.shipmentId}): {d.missingResolution === 'waived' ? 'not charged' : d.missingResolution === 'charged' ? 'charged, as agreed with the farm' : 'the farm will decide with you whether it’s charged'}</p>
                   ))}
                   <TermsCheck order={o} token={(authHeader?.headers?.Authorization || '').replace('Bearer ', '')} />
+                  {asking?.id === o.id && asking.kind === 'again' && (
+                    <div className="mt-2 bg-orange-50 border border-orange-200 rounded-lg p-3 space-y-2">
+                      <p className="text-sm font-semibold text-gray-800">🔁 Order {o.productName} from {o.farmName} again</p>
+                      <div className="flex flex-wrap gap-2 items-center text-sm">
+                        <input type="number" step="any" min="0.001" value={asking.quantity} onChange={(e) => setAsking({ ...asking, quantity: e.target.value })}
+                          className="w-24 px-2 py-1.5 border border-gray-300 rounded" aria-label="Quantity" />
+                        <span className="text-gray-600">{o.unit}</span>
+                        <input value={asking.po} maxLength={40} onChange={(e) => setAsking({ ...asking, po: e.target.value })}
+                          placeholder="Your PO number (optional)" className="flex-1 min-w-[10rem] px-2 py-1.5 border border-gray-300 rounded" />
+                      </div>
+                      <input value={asking.note} maxLength={280} onChange={(e) => setAsking({ ...asking, note: e.target.value })}
+                        placeholder="Note to the farm (optional), e.g. small ones please" className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm" />
+                      <div className="flex gap-3 items-center">
+                        <button onClick={() => orderAgain(o, asking)} disabled={!(Number(asking.quantity) > 0)}
+                          className="bg-orange-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-orange-700 disabled:bg-gray-400">Place order</button>
+                        <button onClick={() => setAsking(null)} className="text-sm text-gray-500 hover:underline">Don't order</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <div className="text-right space-y-1 shrink-0">
+                {poEdit?.id !== o.id && <div className="text-right space-y-1 shrink-0">
                   {(() => {
                     const st = o.status === 'dispatched' && o.shipmentStatus === 'delivered' ? 'delivered' : o.status;   // part_sent / closed_short keep their own label
                     return (
@@ -945,17 +989,17 @@ function OrderStock({ authHeader, approved }) {
                     <button onClick={() => setAsking({ id: o.id, kind: 'cancel-rest' })}
                       className="block text-xs text-red-600 hover:underline ml-auto">Cancel the rest</button>
                   ))}
-                  {o.status === 'requested' && (
-                    <button onClick={() => cancelOrder(o)} className="block text-xs text-red-600 hover:underline ml-auto">Cancel</button>
-                  )}
-                  {!['requested', 'part_sent'].includes(o.status) && !o.isDeal && approved && (asking?.id === o.id && asking.kind === 'again' ? (
-                    <span className="block text-xs text-gray-700">{formatQty(o.quantity, o.unit)} again?{' '}
-                      <button onClick={() => orderAgain(o)} className="text-orange-700 font-semibold hover:underline">Yes, order</button>{' · '}
-                      <button onClick={() => setAsking(null)} className="hover:underline">No</button></span>
+                  {o.status === 'requested' && (asking?.id === o.id && asking.kind === 'cancel' ? (
+                    <span className="block text-xs text-gray-700">Cancel this order?{' '}
+                      <button onClick={() => { setAsking(null); cancelOrder(o); }} className="text-red-600 font-semibold hover:underline">Yes, cancel it</button>{' · '}
+                      <button onClick={() => setAsking(null)} className="hover:underline">No, keep it</button></span>
                   ) : (
-                    <button onClick={() => setAsking({ id: o.id, kind: 'again' })} className="block text-xs font-semibold text-orange-700 hover:underline ml-auto">🔁 Order again</button>
+                    <button onClick={() => setAsking({ id: o.id, kind: 'cancel' })} className="block text-xs text-red-600 hover:underline ml-auto">Cancel order</button>
                   ))}
-                </div>
+                  {!['requested', 'part_sent'].includes(o.status) && !o.isDeal && approved && !(asking?.id === o.id && asking.kind === 'again') && (
+                    <button onClick={() => setAsking({ id: o.id, kind: 'again', quantity: String(o.quantity), po: o.poNumber || '', note: '' })} className="block text-xs font-semibold text-orange-700 hover:underline ml-auto">🔁 Order again</button>
+                  )}
+                </div>}
               </div>
             ))}
           </div>
@@ -1459,6 +1503,7 @@ function Deliveries({ authHeader, approved, onReceived }) {
                 <Refs x={s} className="mt-1" />
                 <p className="text-sm text-gray-600">from {s.fromName}{s.carrierName ? ` via ${s.carrierName}` : ''} · delivery #{s.shipmentId} <TxLink hash={s.sentTxHash} label="Sent" className="ml-1" /></p>
                 {s.dispatchNotes && <p className="text-sm text-gray-600 italic">{s.fromName}: "{s.dispatchNotes}"</p>}
+                {s.senderNote && <p className="text-sm text-gray-700">💬 {s.fromName}: "{s.senderNote}"</p>}
                 {s.handlingSteps?.length > 0 && (
                   <div className="mt-2 bg-white border border-teal-200 rounded-lg p-2">
                     <p className="text-xs font-semibold text-teal-800 mb-1">📍 Updates on the way</p>
@@ -1597,6 +1642,7 @@ function Deliveries({ authHeader, approved, onReceived }) {
                   {s.recalled && (
                     <p className="text-xs text-red-700 font-semibold">🚨 Recalled{s.recallReason ? `: ${s.recallReason}` : ''} — don't use it. Send it back or write it off.</p>
                   )}
+                  {s.senderNote && <p className="text-xs text-gray-600">💬 {s.fromName}: "{s.senderNote}"</p>}
                   {s.deliveryNotes && <p className="text-xs text-gray-600 italic">Your note: "{s.deliveryNotes}"</p>}
                   {s.hasDeliveryPhoto && <DeliveryPhotoButton shipmentId={s.shipmentId} token={token} />}
                   {s.available > 0 && action?.id !== s.shipmentId && approved && (
@@ -1724,6 +1770,7 @@ function ReceiptHistory({ restaurantToken, onLogout }) {
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div className="min-w-0">
               <p className="font-bold text-gray-800">{r.dishName || r.productName || 'Product'}</p>
+              {r.billName && <p className="text-sm text-gray-600">🪑 {r.billName}</p>}
               <p className="font-mono text-xs text-gray-500 break-all">{r.receiptId}</p>
               <p className="text-sm text-gray-500 mt-1">
                 {new Date(r.createdAt).toLocaleString('en-GB', {

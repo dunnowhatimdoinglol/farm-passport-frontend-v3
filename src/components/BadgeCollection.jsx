@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import Maru from './Maru';
 
 function BadgeCollection({ userEmail, authToken, onBack, onLoginRequired }) {
   const [badges, setBadges] = useState([]);
@@ -120,9 +121,12 @@ function BadgeCollection({ userEmail, authToken, onBack, onLoginRequired }) {
     <div className="max-w-4xl mx-auto">
       <div className="bg-white rounded-lg shadow-lg p-8">
         <div className="text-center mb-8">
-          <div className="text-6xl mb-4">🏆</div>
+          {/* v4.4b: Maru keeps an eye on the collection (tap him to say hello) */}
+          <div className="flex justify-center mt-6 mb-2">
+            <Maru mode="sit" size={110} say={badges.length ? `${badges.length} ${badges.length === 1 ? 'badge' : 'badges'}! Nice work!` : 'Scan a receipt and I’ll bring you a medal!'} />
+          </div>
           <h2 className="text-3xl font-bold text-gray-800 mb-2">
-            My Badge Collection
+            🏆 My Badge Collection
           </h2>
           {userEmail && (
             <p className="text-gray-600">{userEmail}</p>
