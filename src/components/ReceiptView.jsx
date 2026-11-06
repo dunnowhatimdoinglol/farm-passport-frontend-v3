@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import AchievementPopup from './AchievementPopup';
 import JourneyTimeline from './JourneyTimeline';
+import Maru from './Maru';
 
 const API_BASE = 'https://farm-passport-backend-v3.onrender.com/api';
 
@@ -31,6 +32,7 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack, onLoginRequired 
   const [claimed,    setClaimed]    = useState(false);
   const [result,     setResult]     = useState(null);   // what the claim gave: badges and/or stamps
   const [journeyOf,  setJourneyOf]  = useState(null);   // which product's journey is showing
+  const [haveBadge,  setHaveBadge]  = useState(null);   // v4.4c: batch IDs this diner already has a badge for (→ a stamp instead)
 
   // Achievement popup state
   const [achievements, setAchievements] = useState([]);
@@ -54,6 +56,14 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack, onLoginRequired 
     };
     if (receiptId) fetchReceipt();
   }, [receiptId]);
+
+  // v4.4c: signed in? Then we know which products give a new badge and which add a stamp to one you have
+  useEffect(() => {
+    if (!authToken) { setHaveBadge(null); return; }
+    axios.get(`${API_BASE}/user/badges`, { headers: { Authorization: `Bearer ${authToken}` } })
+      .then(r => setHaveBadge(new Set((r.data.badges || []).map(b => b.batchId))))
+      .catch(() => setHaveBadge(null));
+  }, [authToken]);
 
   if (loading) {
     return (
@@ -109,6 +119,14 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack, onLoginRequired 
   const farmText = listOf(farms);
   const shown = products.find(p => p.batchId === journeyOf) || products[0];
   const anyRecalled = products.some(p => p.recalled);
+  // v4.4c: what claiming will give — new badges, stamps on badges you already have, or both
+  const willStamp = haveBadge ? products.filter(p => haveBadge.has(p.batchId)).length : 0;
+  const willBadge = products.length - willStamp;
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const claimWhat = !haveBadge ? (products.length > 1 ? plural(products.length, 'Badge') : 'Badge')
+    : willBadge && willStamp ? `${plural(willBadge, 'Badge')} + ${plural(willStamp, 'Stamp')}`
+    : willStamp ? (willStamp > 1 ? plural(willStamp, 'Stamp') : 'Stamp')
+    : (willBadge > 1 ? plural(willBadge, 'Badge') : 'Badge');
 
   const handleClaim = async () => {
     if (!authToken) { if (onLoginRequired) onLoginRequired(); return; }
@@ -269,7 +287,9 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack, onLoginRequired 
       {result ? (
         <div className="bg-white rounded-lg shadow-lg p-8">
           <div className="text-center mb-5">
-            <div className="text-6xl mb-3">{newCount ? '🎖️' : '⭐'}</div>
+            {/* v4.4c: stamps only → Maru hands over a stamp (new badges get him in the big popup) */}
+            {newCount ? <div className="text-6xl mb-3">🎖️</div>
+              : <div className="flex justify-center mt-8 mb-2"><Maru mode="give" gift="stamp" size={150} say="Another stamp!" flyAway={2800} /></div>}
             <h3 className="text-2xl font-bold text-green-700">
               {newCount && stampCount ? `${newCount} new badge${newCount > 1 ? 's' : ''} + ${stampCount} stamp${stampCount > 1 ? 's' : ''}!`
                 : newCount ? (newCount > 1 ? `${newCount} new badges!` : 'Badge collected!')
@@ -306,12 +326,19 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack, onLoginRequired 
           <div className="text-center">
             <div className="text-6xl mb-4">🎖️</div>
             <h3 className="text-2xl font-bold text-gray-800 mb-2">
-              {products.length > 1 ? `Claim ${products.length} Farm Badges!` : 'Claim Your Farm Badge!'}
+              {haveBadge && willStamp && !willBadge ? `Claim ${willStamp > 1 ? `${willStamp} Stamps` : 'Your Stamp'}!`
+                : haveBadge && willStamp ? `Claim ${claimWhat}!`
+                : products.length > 1 ? `Claim ${products.length} Farm Badges!` : 'Claim Your Farm Badge!'}
             </h3>
             <p className="text-gray-600 mb-1">
-              You supported <strong>{farmText}</strong> — now collect your {products.length > 1 ? 'badges' : 'badge'}!
+              You supported <strong>{farmText}</strong>{haveBadge && willStamp && !willBadge ? ' again' : ''} — now collect your {haveBadge && willStamp && !willBadge ? (willStamp > 1 ? 'stamps' : 'stamp') : haveBadge && willStamp ? 'rewards' : products.length > 1 ? 'badges' : 'badge'}!
             </p>
-            {products.length > 1 && (
+            {haveBadge && willStamp > 0 ? (
+              <p className="text-gray-500 text-sm">
+                {willBadge ? `${plural(willBadge, 'new badge')}, and ` : ''}{willStamp === 1 ? 'a stamp' : `${willStamp} stamps`} on {willStamp === 1 ? 'a badge' : 'badges'} you already have:{' '}
+                {products.filter(p => haveBadge.has(p.batchId)).map(p => p.productName).filter(Boolean).join(', ')}.
+              </p>
+            ) : products.length > 1 && (
               <p className="text-gray-500 text-sm">One for each product on your bill. If you already have one, you get a stamp on it instead.</p>
             )}
             <p className="text-gray-400 text-sm mb-6">This receipt can only be redeemed once.</p>
@@ -331,7 +358,8 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack, onLoginRequired 
               {claiming    ? '⏳ Claiming…'
                : isExpired ? '⏰ Expired'
                : !authToken? `🔐 Login to Claim ${products.length > 1 ? 'Badges' : 'Badge'}`
-               :            `🎖️ Claim ${products.length > 1 ? `${products.length} Badges` : 'Badge'}`}
+               : haveBadge && willStamp && !willBadge ? `⭐ Claim ${claimWhat}`
+               :            `🎖️ Claim ${claimWhat}`}
             </button>
 
             {!authToken && <p className="text-gray-500 text-sm mt-3">Click above to login and claim</p>}

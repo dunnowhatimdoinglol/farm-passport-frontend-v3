@@ -781,106 +781,8 @@ function OrderStock({ authHeader, approved }) {
 
       {kind === 'meat' && <MeatOrder authHeader={authHeader} approved={approved} onOrdered={load} />}
 
-      {kind === 'produce' && deals.length > 0 && (
-        <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-5">
-          <h3 className="text-lg font-bold text-amber-900 mb-1">🏷️ Short-date deals</h3>
-          <p className="text-xs text-amber-800 mb-3">Reduced by the farm because the use-by is close — great for today's specials.</p>
-          <div className="space-y-2">
-            {deals.map(d => (
-              <button key={d.batchId} type="button" onClick={() => { setPick(`deal:${d.batchId}`); setQuantity(String(d.remaining)); }}
-                className={`w-full text-left bg-white border rounded-lg p-3 flex justify-between gap-2 flex-wrap ${pick === `deal:${d.batchId}` ? 'border-amber-500 ring-2 ring-amber-300' : 'border-amber-200'}`}>
-                <span><strong>{d.productName}</strong> — {d.farmName} · {formatQty(d.remaining, d.unit)} · use by {d.useBy ? day(d.useBy) : '—'}</span>
-                <span>{d.normalPrice !== null && <span className="line-through text-gray-400 mr-1">{gbp(d.normalPrice)}</span>}<strong className="text-amber-800">{gbp(d.dealPrice)}/{d.unit}</strong></span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {kind === 'produce' && <div className="bg-white rounded-lg shadow-lg p-8">
-        <h3 className="text-lg font-bold text-gray-800 mb-1">🛒 Order from a farm</h3>
-        <p className="text-sm text-gray-500 mb-5">Choose a product — the farm sends the stock with the soonest use-by first. Payment is arranged directly with the farm for now.</p>
-
-        <form onSubmit={submit} className="space-y-5">
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Product</label>
-            <select value={pick} onChange={(e) => { setPick(e.target.value); setQuantity(''); }} required
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-orange-500 focus:border-transparent">
-              <option value="">— Choose a product —</option>
-              {products.map(p => (
-                <option key={p.key} value={p.key}>
-                  {p.productName} — {p.farmName || 'Farm'} · {formatQty(p.available, p.unit)}
-                  {p.priceFrom !== null ? ` · ${p.priceFrom === p.priceTo ? gbp(p.priceFrom) : `${gbp(p.priceFrom)}–${gbp(p.priceTo)}`}/${p.unit}` : ''}
-                </option>
-              ))}
-              {deals.length > 0 && <optgroup label="🏷️ Short-date deals">
-                {deals.map(d => <option key={d.batchId} value={`deal:${d.batchId}`}>{d.productName} — {d.farmName} · {formatQty(d.remaining, d.unit)} · {gbp(d.dealPrice)}/{d.unit} (use by {d.useBy ? day(d.useBy) : '—'})</option>)}
-              </optgroup>}
-            </select>
-            {product && (
-              <p className="text-xs text-gray-500 mt-1">
-                Use-by {product.useByFrom ? `from ${day(product.useByFrom)}` : 'not set'}{product.useByTo && product.useByTo !== product.useByFrom ? ` to ${day(product.useByTo)}` : ''} · {product.batches} batch{product.batches === 1 ? '' : 'es'}
-              </p>
-            )}
-          </div>
-          <div className="grid sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">Quantity</label>
-              <div className="relative">
-                <input type="number" step="any" min="0.001"
-                  value={quantity} onChange={(e) => setQuantity(e.target.value)} required placeholder="e.g. 10"
-                  className={`w-full pl-4 pr-16 py-3 border rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent ${tooMuch ? 'border-red-500' : 'border-gray-300'}`} />
-                {unit && <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">{unit}</span>}
-              </div>
-              {max !== undefined && (
-                <p className={`text-xs mt-1 ${tooMuch ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
-                  {untilNote && !(max > 0) ? `None of it will last until ${day(until)}${untilNote.includes('latest') ? untilNote.slice(untilNote.indexOf(' · ')) : ''}`
-                    : <>{tooMuch ? `Only ${formatQty(max, unit)} available` : `${formatQty(max, unit)} available`}{untilNote}{heldNote}</>}
-                </p>
-              )}
-            </div>
-            {!deal && (
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Needs to last until <span className="font-normal text-gray-400">(optional)</span></label>
-                <input type="date" value={until} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setUntil(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg" />
-              </div>
-            )}
-          </div>
-          {(product || deal) && (
-            <p className="text-sm text-gray-600">
-              {price !== null && price !== undefined ? (
-                <>
-                  about {gbp(price)} per {unit}
-                  {Number(quantity) > 0 && <> · estimated <strong>{gbp(Number(quantity) * price)}</strong></>}
-                  <span className="block text-xs text-gray-400">The farm confirms the final price and any delivery charge when it dispatches.</span>
-                </>
-              ) : (
-                <span className="text-gray-400">No price listed — the farm will confirm the price when it dispatches.</span>
-              )}
-            </p>
-          )}
-          <div className="grid sm:grid-cols-3 gap-4">
-            <div className="sm:col-span-2">
-              <label className="block text-sm font-semibold text-gray-700 mb-2">Note to the farm <span className="font-normal text-gray-400">(optional)</span></label>
-              <input type="text" value={note} onChange={(e) => setNote(e.target.value)} maxLength={280}
-                placeholder="e.g. Delivery Tuesday morning please"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent" />
-            </div>
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">Your PO number <span className="font-normal text-gray-400">(optional)</span></label>
-              <input type="text" value={po} onChange={(e) => setPo(e.target.value)} maxLength={40} placeholder="e.g. PO-4521"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent" />
-            </div>
-          </div>
-          {error && <p className="text-sm text-red-600 font-semibold">⚠️ {error}</p>}
-          {message && <p className="text-sm text-green-700 font-semibold">✅ {message}</p>}
-          <button type="submit" disabled={busy || !approved}
-            className="w-full bg-orange-600 text-white py-3 rounded-lg font-bold text-lg hover:bg-orange-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed">
-            {busy ? '⏳ Sending…' : !approved ? '🔒 Waiting for approval' : '🛒 Send order'}
-          </button>
-        </form>
-      </div>}
+      {/* v4.4c: fruit, veg & more ordered like meat — a farm, its products as cards, several at once */}
+      {kind === 'produce' && <ProduceOrder products={products} deals={deals} authHeader={authHeader} approved={approved} onOrdered={load} />}
 
       {owedByFarm.length > 0 && (
         <div className="bg-white rounded-lg shadow-lg p-6">
@@ -896,9 +798,8 @@ function OrderStock({ authHeader, approved }) {
           </div>
         </div>
       )}
-      {/* the produce tab shows these inside its order form */}
-      {kind === 'meat' && message && <p className="text-sm text-green-700 font-semibold">✅ {message}</p>}
-      {kind === 'meat' && error && <p className="text-sm text-red-600 font-semibold">⚠️ {error}</p>}
+      {message && <p className="text-sm text-green-700 font-semibold">✅ {message}</p>}
+      {error && <p className="text-sm text-red-600 font-semibold">⚠️ {error}</p>}
 
       <div className="bg-white rounded-lg shadow-lg p-8">
         <h3 className="text-lg font-bold text-gray-800 mb-4">📋 Your {kind === 'meat' ? 'meat' : 'fruit, veg & more'} orders</h3>
@@ -1209,6 +1110,202 @@ function MeatOrder({ authHeader, approved, onOrdered }) {
             <button onClick={place} disabled={busy || !approved || problems.length > 0}
               className="w-full bg-orange-600 text-white py-3 rounded-lg font-bold hover:bg-orange-700 disabled:bg-gray-400">
               {busy ? '⏳ Ordering…' : !approved ? '🔒 Waiting for approval' : problems.length ? `Fix ${problems.length} item${problems.length === 1 ? '' : 's'} first` : `🛒 Place ${basket.length} order${basket.length === 1 ? '' : 's'}`}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────
+// v4.4c — fruit, veg & more, laid out like the meat tab: pick a farm, browse its products by type,
+// put amounts on as many as you like, then place them all at once (one order per product).
+// ─────────────────────────────────────────────────────────
+const PRODUCE_GROUPS = [
+  ['Vegetable', '🥕 Veg'], ['Salad & herbs', '🌿 Salad & herbs'], ['Fruit', '🍎 Fruit'], ['Mushrooms', '🍄 Mushrooms'],
+  ['Eggs', '🥚 Eggs'], ['Dairy', '🧀 Dairy'], ['Honey', '🍯 Honey'], ['Grain & flour', '🌾 Grain & flour'], ['Grain', '🌾 Grain & flour'],
+  ['Nuts', '🌰 Nuts'], ['Preserves', '🫙 Preserves'], ['Juice & drinks', '🧃 Juice & drinks'], ['Flowers', '💐 Flowers'],
+];
+const groupOf = (t) => { const g = PRODUCE_GROUPS.find(([k]) => k === t); return g ? g[1] : '🧺 Other'; };
+const groupRank = (label) => { const i = PRODUCE_GROUPS.findIndex(([, l]) => l === label); return label === '🏷️ Deals' ? 99 : i < 0 ? 98 : i; };
+// "£6.50/jar", not "/jars"
+const perUnit = (u) => ({ jars: 'jar', bottles: 'bottle', bunches: 'bunch', trays: 'tray', litres: 'litre', units: 'unit' }[u] || u);
+
+function ProduceOrder({ products, deals, authHeader, approved, onOrdered }) {
+  const [farmAddr, setFarmAddr] = useState(null);
+  const [group,   setGroup]   = useState(null);
+  const [qty,     setQty]     = useState({});       // product key (or deal:<batchId>) → amount typed
+  const [until,   setUntil]   = useState('');
+  const [note,    setNote]    = useState('');
+  const [po,      setPo]      = useState('');
+  const [busy,    setBusy]    = useState(false);
+  const [error,   setError]   = useState(null);
+  const [message, setMessage] = useState(null);
+  const day = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+
+  // Everything for sale (deals as their own cards), grouped by farm
+  const items = [
+    ...products.map(p => ({ k: p.key, p, group: groupOf(p.productType), farmerAddress: p.farmerAddress, farmName: p.farmName, unit: p.unit,
+      name: p.productName, price: p.pricePerUnit, priceFrom: p.priceFrom, priceTo: p.priceTo, available: p.available })),
+    ...deals.map(d => ({ k: `deal:${d.batchId}`, d, group: '🏷️ Deals', farmerAddress: d.farmerAddress, farmName: d.farmName, unit: d.unit,
+      name: d.productName, price: d.dealPrice, available: d.remaining })),
+  ];
+  const farms = Object.values(items.reduce((m, x) => {
+    const f = m[x.farmerAddress] || (m[x.farmerAddress] = { farmerAddress: x.farmerAddress, farmName: x.farmName, items: [] });
+    f.items.push(x); return m;
+  }, {})).sort((a, b) => String(a.farmName).localeCompare(String(b.farmName)));
+  const farm = farms.find(f => f.farmerAddress === farmAddr) || (farms.length === 1 ? farms[0] : null);
+  const groups = farm ? [...new Set(farm.items.map(x => x.group))].sort((a, b) => groupRank(a) - groupRank(b)) : [];
+  const g = groups.includes(group) ? group : groups[0];
+
+  // How much lasts until the "needs to last until" date (deals: their own use-by)
+  const lasting = (x) => {
+    if (!until) return x.available;
+    if (x.d) return !x.d.useBy || x.d.useBy.slice(0, 10) >= until ? x.available : 0;
+    if (!x.p.lots) return x.available;
+    const n = x.p.lots.filter(l => !l.useBy || l.useBy.slice(0, 10) >= until).reduce((t, l) => t + Number(l.quantity), 0) - (x.p.reserved || 0);
+    return Math.max(0, Math.min(x.available, Math.round(n * 1000) / 1000));
+  };
+  const basket = items.map(x => ({ ...x, q: Number(qty[x.k]) })).filter(x => x.q > 0);
+  const short = basket.filter(x => x.q > lasting(x));
+  const priced = basket.filter(x => x.price !== null && x.price !== undefined);
+  const total = priced.reduce((n, x) => n + x.q * x.price, 0);
+  const step = (u) => (['kg', 'litres'].includes(u) ? 0.5 : 1);
+
+  const place = async () => {
+    setBusy(true); setError(null); setMessage(null);
+    const ok = [];
+    try {
+      for (const x of basket) {
+        await axios.post(`${API_BASE}/restaurant/orders`, x.d
+          ? { dealBatchId: x.d.batchId, quantity: x.q, note: note.trim() || undefined, poNumber: po.trim() || undefined }
+          : { farmerAddress: x.farmerAddress, productName: x.name, unit: x.unit, quantity: x.q,
+              neededUntil: until || undefined, note: note.trim() || undefined, poNumber: po.trim() || undefined }, authHeader);
+        ok.push(x);
+      }
+      setMessage(`${ok.length} order${ok.length === 1 ? '' : 's'} sent to ${[...new Set(ok.map(x => x.farmName || 'the farm'))].join(' and ')}. You'll get an email when ${ok.length === 1 ? 'it’s' : 'they’re'} on the way.`);
+      setQty({}); setNote(''); setUntil(''); setPo('');
+    } catch (err) {
+      setError(`${ok.length ? `${ok.length} sent, then ` : ''}${basket[ok.length]?.name}: ${err.response?.data?.error || 'could not order'}`);
+      setQty(Object.fromEntries(basket.slice(ok.length).map(x => [x.k, String(x.q)])));
+    } finally {
+      setBusy(false);
+      onOrdered?.();
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-lg shadow-lg p-6">
+        <h3 className="text-lg font-bold text-gray-800 mb-1">🛒 Order from a farm</h3>
+        <p className="text-sm text-gray-500 mb-4">Pick a farm, then put amounts on as many products as you like. The farm sends the soonest use-by first. Payment is arranged directly with the farm for now.</p>
+        {farms.length === 0 && <p className="text-sm text-gray-500">Nothing for sale right now. Check back soon.</p>}
+
+        {/* 1. Farm */}
+        <div className="grid sm:grid-cols-2 gap-2">
+          {farms.map(f => {
+            const inBasket = basket.filter(x => x.farmerAddress === f.farmerAddress).length;
+            const nDeals = f.items.filter(x => x.d).length;
+            return (
+              <button key={f.farmerAddress} onClick={() => { setFarmAddr(f.farmerAddress); setGroup(null); }}
+                className={`text-left border-2 rounded-lg p-3 ${farm?.farmerAddress === f.farmerAddress ? 'border-orange-500 bg-orange-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                <p className="font-bold text-gray-800">{f.farmName || 'Farm'} {inBasket > 0 && <span className="text-xs bg-orange-600 text-white rounded-full px-2 py-0.5 ml-1">{inBasket} in order</span>}</p>
+                <p className="text-xs text-gray-600">{[...new Set(f.items.filter(x => !x.d).map(x => x.group))].sort((a, b) => groupRank(a) - groupRank(b)).join(' · ')}</p>
+                <p className="text-xs text-green-700 font-semibold">{f.items.filter(x => !x.d).length} product{f.items.filter(x => !x.d).length === 1 ? '' : 's'}{nDeals ? <span className="text-amber-700"> · 🏷️ {nDeals} deal{nDeals === 1 ? '' : 's'}</span> : null}</p>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* 2. Type, 3. Products */}
+        {farm && (
+          <div className="mt-5">
+            <div className="flex gap-1 border-b border-gray-200 mb-3 overflow-x-auto">
+              {groups.map(t => (
+                <button key={t} onClick={() => setGroup(t)}
+                  className={`px-4 py-2 text-sm font-semibold rounded-t-lg whitespace-nowrap ${g === t ? (t === '🏷️ Deals' ? 'bg-amber-600 text-white' : 'bg-gray-800 text-white') : 'text-gray-600 hover:bg-gray-100'}`}>
+                  {t} <span className="font-normal opacity-75">({farm.items.filter(x => x.group === t).length})</span>
+                </button>
+              ))}
+            </div>
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {farm.items.filter(x => x.group === g).map(x => {
+                const q = Number(qty[x.k]);
+                const left = lasting(x);
+                const tooMuch = q > left;
+                return (
+                  <div key={x.k} className={`border rounded-lg p-3 flex flex-col ${q > 0 ? (tooMuch ? 'border-red-400 bg-red-50' : 'border-orange-500 bg-orange-50') : x.d ? 'border-amber-300 bg-amber-50' : 'border-gray-200'}`}>
+                    <div className="flex justify-between gap-2">
+                      <p className="font-semibold text-gray-800">{x.name}</p>
+                      <p className="text-sm font-semibold text-gray-700 shrink-0 text-right">
+                        {x.d ? <>{x.d.normalPrice !== null && <span className="line-through text-gray-400 font-normal mr-1">{gbp(x.d.normalPrice)}</span>}<span className="text-amber-800">{gbp(x.price)}/{perUnit(x.unit)}</span></>
+                          : x.priceFrom !== null && x.priceFrom !== undefined ? `${x.priceFrom === x.priceTo ? gbp(x.priceFrom) : `${gbp(x.priceFrom)}–${gbp(x.priceTo)}`}/${perUnit(x.unit)}`
+                          : <span className="text-xs text-gray-400 font-normal">price on request</span>}
+                      </p>
+                    </div>
+                    <p className="text-xs mt-0.5 text-green-700 font-semibold">✅ {formatQty(x.available, x.unit)} available</p>
+                    <p className="text-xs text-gray-500">
+                      {x.d ? `🏷️ Short-date deal · use by ${x.d.useBy ? day(x.d.useBy) : '—'}`
+                        : x.p.useByFrom ? `Use by ${day(x.p.useByFrom)}${x.p.useByTo && x.p.useByTo !== x.p.useByFrom ? ` – ${day(x.p.useByTo)}` : ''}` : 'No use-by set'}
+                    </p>
+                    {x.p?.reserved > 0 && <p className="text-xs text-gray-500">🔒 {formatQty(x.p.reserved, x.unit)} more already held for other cafés' orders</p>}
+                    {until && left < x.available && <p className="text-xs text-amber-800">{left > 0 ? `Only ${formatQty(left, x.unit)} lasts until ${day(until)}` : `None of it lasts until ${day(until)}`}</p>}
+                    <div className="mt-auto pt-2 flex items-center gap-1">
+                      <button type="button" disabled={!(q > 0)} onClick={() => setQty({ ...qty, [x.k]: String(Math.max(0, Math.round(((q || 0) - step(x.unit)) * 1000) / 1000) || '') })}
+                        className="w-8 h-8 rounded border border-gray-300 bg-white disabled:opacity-40" aria-label="Less">−</button>
+                      <input type="number" step="any" min="0" value={qty[x.k] ?? ''} onChange={(e) => setQty({ ...qty, [x.k]: e.target.value })}
+                        placeholder="0" className="w-20 px-2 py-1 border border-gray-300 rounded text-center" aria-label={`${x.name} ${x.unit}`} />
+                      <button type="button" onClick={() => setQty({ ...qty, [x.k]: String(Math.round(((q || 0) + step(x.unit)) * 1000) / 1000) })}
+                        className="w-8 h-8 rounded border border-gray-300 bg-white" aria-label="More">+</button>
+                      <span className="text-sm text-gray-500">{x.unit}</span>
+                    </div>
+                    {tooMuch && <p className="text-xs text-red-700 mt-1">Only {formatQty(left, x.unit)} {until ? `lasts until ${day(until)}` : 'available'}.</p>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {(basket.length > 0 || message || error) && (
+        <div className="bg-white rounded-lg shadow-lg p-6 border-2 border-orange-500 sticky bottom-2">
+          {basket.length > 0 && (
+            <>
+              <p className="font-bold text-gray-800 mb-2">🧺 Your order</p>
+              <div className="divide-y divide-gray-100 text-sm mb-3">
+                {basket.map(x => (
+                  <div key={x.k} className="py-1.5 flex justify-between gap-2">
+                    <span>{formatQty(x.q, x.unit)} {x.name} <span className="text-gray-500">· {x.farmName}</span>
+                      {x.d && <span className="text-xs font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 ml-1">deal</span>}
+                      {x.q > lasting(x) && <span className="text-xs font-semibold px-1.5 py-0.5 rounded bg-red-100 text-red-800 ml-1">not enough</span>}</span>
+                    <span className="text-gray-700 shrink-0 flex items-center gap-2">
+                      {x.price !== null && x.price !== undefined ? gbp(x.q * x.price) : '—'}
+                      <button onClick={() => setQty({ ...qty, [x.k]: '' })} className="text-xs text-red-600" aria-label="Remove">✕</button></span>
+                  </div>
+                ))}
+              </div>
+              <div className="grid sm:grid-cols-3 gap-3 mb-3">
+                <label className="text-xs font-semibold text-gray-700">Needs to last until <span className="font-normal text-gray-400">(optional)</span>
+                  <input type="date" value={until} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setUntil(e.target.value)} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg font-normal" />
+                </label>
+                <label className="text-xs font-semibold text-gray-700">Note to the farm <span className="font-normal text-gray-400">(optional)</span>
+                  <input value={note} maxLength={280} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Delivery Tuesday morning please" className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg font-normal" />
+                </label>
+                <label className="text-xs font-semibold text-gray-700">Your PO number <span className="font-normal text-gray-400">(optional)</span>
+                  <input value={po} maxLength={40} onChange={(e) => setPo(e.target.value)} placeholder="e.g. PO-4521" className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg font-normal" />
+                </label>
+              </div>
+              <p className="text-sm text-gray-700 mb-2">{priced.length ? <>Estimated <strong>{gbp(total)}</strong>{priced.length < basket.length ? ' + items priced on request' : ''}</> : 'Prices on request'} <span className="text-xs text-gray-400">· the farm confirms the final price and any delivery charge when it sends</span></p>
+            </>
+          )}
+          {error && <p className="text-sm text-red-600 font-semibold mb-2">⚠️ {error}</p>}
+          {message && <p className="text-sm text-green-700 font-semibold mb-2">✅ {message}</p>}
+          {basket.length > 0 && (
+            <button onClick={place} disabled={busy || !approved || short.length > 0}
+              className="w-full bg-orange-600 text-white py-3 rounded-lg font-bold hover:bg-orange-700 disabled:bg-gray-400">
+              {busy ? '⏳ Ordering…' : !approved ? '🔒 Waiting for approval' : short.length ? `Fix ${short.length} item${short.length === 1 ? '' : 's'} first` : `🛒 Place ${basket.length} order${basket.length === 1 ? '' : 's'}`}
             </button>
           )}
         </div>
@@ -1532,6 +1629,11 @@ function Deliveries({ authHeader, approved, onReceived }) {
                   <div className="mt-3 space-y-2">
                     <PhotoPicker photo={photos[s.shipmentId]} onChange={(p) => setPhotos({ ...photos, [s.shipmentId]: p })} disabled={busyId === s.shipmentId} />
                     {!photos[s.shipmentId] && <p className="text-xs text-gray-500">📷 A photo is optional, but it settles any disagreement about what arrived.</p>}
+                    {/* v4.4c: a note to the farm without opening "Something wrong?" (private between you and the farm) */}
+                    <input type="text" maxLength={280} value={notes[s.shipmentId] || ''} disabled={busyId === s.shipmentId}
+                      onChange={(e) => setNotes({ ...notes, [s.shipmentId]: e.target.value })}
+                      placeholder={`Note to ${s.fromName || 'the farm'} (optional), e.g. Lovely, thanks!`} aria-label="Note to the farm"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
                     {s.terms && (s.terms.unitPrice != null || s.terms.total != null) && (
                       <p className="text-xs text-gray-600">Confirming agrees the price: {s.terms.unitPrice != null ? <>{gbp(s.terms.unitPrice)}/{s.unit}{s.terms.deliveryFee ? ` + ${gbp(s.terms.deliveryFee)} delivery` : ''}</> : gbp(s.terms.total)}{payOf(s) !== null ? <> · you'll pay <strong>{gbp(payOf(s))}</strong></> : null}</p>
                     )}

@@ -3,6 +3,8 @@
 //
 //   <Maru mode="give" />   pops up and hands over a medal (when a diner collects a badge)
 //   <Maru mode="sit" />    sits quietly, blinks now and then, and waves when tapped (the badges page)
+//   <Maru mode="give" gift="stamp" />   the same, handing over a star stamp (a badge you already had)
+//   <Maru mode="loading" /> wags his tail slowly while his eyes go round and round (while the site's busy)
 //
 // Drawn in SVG and animated with CSS: no images or extra packages. Calm for people who turn motion off.
 import { useState, useEffect } from 'react';
@@ -24,6 +26,11 @@ const CSS = `
 @keyframes maru-breathe{0%,100%{transform:scale(1,1)}50%{transform:scale(1.012,.988)}}
 @keyframes maru-wiggle{0%,100%{transform:rotate(0)}25%{transform:rotate(-4deg)}75%{transform:rotate(4deg)}}
 .maru-tail{transform-origin:62px 186px;animation:maru-tail 2.6s ease-in-out infinite}
+.maru-loading .maru-tail{animation-duration:3.6s}
+.maru-loading .maru-eyes{animation:none}
+.maru-loading .maru-pupils{animation:maru-roll 1.4s linear infinite}
+@keyframes maru-roll{0%{transform:translate(3px,0)}12.5%{transform:translate(2.1px,2.1px)}25%{transform:translate(0,3px)}37.5%{transform:translate(-2.1px,2.1px)}
+  50%{transform:translate(-3px,0)}62.5%{transform:translate(-2.1px,-2.1px)}75%{transform:translate(0,-3px)}87.5%{transform:translate(2.1px,-2.1px)}100%{transform:translate(3px,0)}}
 @keyframes maru-tail{0%,100%{transform:rotate(0)}50%{transform:rotate(9deg)}}
 .maru-eyes{transform-origin:100px 82px;animation:maru-blink 4.6s infinite}
 @keyframes maru-blink{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.08)}}
@@ -67,6 +74,16 @@ function Medal() {
       <path d="M145 117 C146 110 152 108 156 109 C155 114 151 118 145 117 Z" fill={GREEN} />
       <path d="M146 116 L153 111" stroke="#F5D267" strokeWidth="1" strokeLinecap="round" />
       <path d="M141 106 L143 104 M158 104 L160 106" stroke="#fff" strokeWidth="2" strokeLinecap="round" opacity=".8" />
+    </g>
+  );
+}
+
+function Stamp() {
+  return (
+    <g className="maru-medal">
+      <circle cx="150" cy="110" r="16" fill="#FFF7E0" stroke={GOLD} strokeWidth="2.5" strokeDasharray="3 2.2" />
+      <path d="M150 99 L153.2 106 L160.8 106.6 L155 111.6 L156.8 119 L150 115 L143.2 119 L145 111.6 L139.2 106.6 L146.8 106 Z" fill={GOLD} stroke="#B8891A" strokeWidth="1.2" strokeLinejoin="round" />
+      <path d="M140 96 L142 94 M160 94 L162 96" stroke={GOLD} strokeWidth="2" strokeLinecap="round" />
     </g>
   );
 }
@@ -133,10 +150,12 @@ function Cat({ holding, armUp }) {
         <g className="maru-eyes">
           <ellipse cx="78" cy="86" rx="9" ry="8" fill={EYE} />
           <ellipse cx="122" cy="86" rx="9" ry="8" fill={EYE} />
-          <ellipse cx="79" cy="87" rx="4" ry="6" fill={INK} />
-          <ellipse cx="121" cy="87" rx="4" ry="6" fill={INK} />
-          <circle cx="81" cy="84" r="2" fill="#fff" />
-          <circle cx="123" cy="84" r="2" fill="#fff" />
+          <g className="maru-pupils">
+            <ellipse cx="79" cy="87" rx="4" ry="6" fill={INK} />
+            <ellipse cx="121" cy="87" rx="4" ry="6" fill={INK} />
+            <circle cx="81" cy="84" r="2" fill="#fff" />
+            <circle cx="123" cy="84" r="2" fill="#fff" />
+          </g>
           {/* relaxed lids */}
           <path d="M68 82 C72 77 84 77 88 82" stroke={INK} strokeWidth="2.5" fill="none" strokeLinecap="round" />
           <path d="M112 82 C116 77 128 77 132 82" stroke={INK} strokeWidth="2.5" fill="none" strokeLinecap="round" />
@@ -158,7 +177,7 @@ function Cat({ holding, armUp }) {
 
         {/* the raised paw (black sock) holding the medal — or waving */}
         {armUp && <g className="maru-arm">
-          {holding && <Medal />}
+          {holding === 'stamp' ? <Stamp /> : holding ? <Medal /> : null}
           <path d="M120 156 C124 140 134 124 144 120 C152 118 156 126 152 132 C146 142 138 152 132 162 Z" fill="#fff" stroke="#E6E3DC" strokeWidth="1.5" />
           <path d="M127 150 C131 142 136 135 141 131 L148 137 C143 143 138 150 134 156 Z" fill={INK} />
           <ellipse cx="149" cy="124" rx="8" ry="7" fill="#fff" stroke="#E6E3DC" strokeWidth="1.5" />
@@ -173,14 +192,14 @@ function Cat({ holding, armUp }) {
  * mode: 'give' (pops up holding a medal) | 'sit' (blinks; tap to wave)
  * say: the speech bubble; size: width in px; flyAway: in 'give', the medal flies off after this many ms (0 = stays)
  */
-export default function Maru({ mode = 'sit', say, size = 150, flyAway = 0, className = '' }) {
+export default function Maru({ mode = 'sit', gift = 'medal', say, size = 150, flyAway = 0, className = '' }) {
   const [waving, setWaving] = useState(false);
   const [bubble, setBubble] = useState(mode === 'give' ? (say ?? 'Here you go!') : null);
   const [flying, setFlying] = useState(false);
 
   useEffect(() => {
     if (mode !== 'give' || !flyAway) return undefined;
-    const t = setTimeout(() => { setFlying(true); setBubble('Added to your collection!'); }, flyAway);
+    const t = setTimeout(() => { setFlying(true); setBubble(gift === 'stamp' ? 'Stamped!' : 'Added to your collection!'); }, flyAway);
     return () => clearTimeout(t);
   }, [mode, flyAway]);
 
@@ -194,16 +213,16 @@ export default function Maru({ mode = 'sit', say, size = 150, flyAway = 0, class
   };
 
   const cls = ['maru',
-    mode === 'give' ? 'maru-pop maru-give maru-happy' : 'maru-tap',
+    mode === 'give' ? 'maru-pop maru-give maru-happy' : mode === 'loading' ? 'maru-loading' : 'maru-tap',
     waving ? 'maru-wave' : '', flying ? 'maru-flying' : '', className].join(' ');
   return (
     <span className={cls} style={{ width: size, height: size * 1.1 }}
       onClick={hello} role={mode === 'sit' ? 'button' : undefined} tabIndex={mode === 'sit' ? 0 : undefined}
       onKeyDown={(e) => { if (mode === 'sit' && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); hello(); } }}
-      aria-label={mode === 'sit' ? 'Maru the cat. Tap to say hello' : undefined}>
+      aria-label={mode === 'sit' ? 'Maru the cat. Tap to say hello' : mode === 'loading' ? 'Loading' : undefined}>
       <style>{CSS}</style>
       {bubble && <span className="maru-bubble" key={bubble}>{bubble}</span>}
-      <Cat holding={mode === 'give'} armUp={mode === 'give' || waving} />
+      <Cat holding={mode === 'give' ? gift : null} armUp={mode === 'give' || waving} />
     </span>
   );
 }

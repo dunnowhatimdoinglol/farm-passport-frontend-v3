@@ -46,8 +46,12 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
   };
 
   // No "Meat": meat sold to cafés comes from an approved abattoir, so register the live animals instead
-  const productTypes = ['Vegetable', 'Fruit', 'Dairy', 'Grain', 'Livestock'];
-  const units = ['kg', 'units', 'litres', 'dozen'];
+  // v4.4c: more of what a farm produces. Each has a usual unit, picked for you (you can still change it).
+  const productTypes = ['Vegetable', 'Salad & herbs', 'Fruit', 'Mushrooms', 'Eggs', 'Dairy', 'Honey', 'Grain', 'Nuts', 'Preserves', 'Juice & drinks', 'Flowers', 'Livestock'];
+  const TYPE_LABEL = { Grain: 'Grain & flour', 'Preserves': 'Preserves (jams, chutneys, pickles)', 'Juice & drinks': 'Juice & drinks (juice, cider, milk drinks)', 'Flowers': 'Cut flowers' };
+  const USUAL_UNIT = { Eggs: 'dozen', Dairy: 'litres', Honey: 'jars', Preserves: 'jars', 'Juice & drinks': 'bottles', Flowers: 'bunches', 'Salad & herbs': 'kg' };
+  const units = ['kg', 'units', 'litres', 'dozen', 'trays', 'jars', 'bottles', 'bunches'];
+  const UNIT_LABEL = { trays: 'trays (30 eggs)' };
   const isLivestock = productType === 'Livestock';
   const isCattle = isLivestock && species === 'Cattle';
   const tidyTag = (t) => t.trim().replace(/\s+/g, ' ').toUpperCase();
@@ -70,14 +74,14 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
   const chooseType = (t) => {
     setProductType(t);
     if (t === 'Livestock') setUnit('head');
-    else if (unit === 'head') setUnit('kg');
+    else setUnit(USUAL_UNIT[t] || 'kg');
   };
   const chooseSpecies = (sp) => setSpecies(sp);
 
   const generateBatchId = () => {
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const random = Math.random().toString(36).substring(2, 6).toUpperCase();
-    const type = productType.substring(0, 3).toUpperCase();
+    const type = productType.replace(/[^A-Za-z]/g, '').substring(0, 3).toUpperCase();
     return `${type}-${date}-${random}`;
   };
 
@@ -248,7 +252,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
             required
           >
             {productTypes.map(type => (
-              <option key={type} value={type}>{type === 'Livestock' ? 'Livestock (going to an abattoir)' : type}</option>
+              <option key={type} value={type}>{type === 'Livestock' ? 'Livestock (going to an abattoir)' : TYPE_LABEL[type] || type}</option>
             ))}
           </select>
           {!isLivestock && <p className="text-xs text-gray-500 mt-1">Selling meat? Register the live animals as <strong>Livestock</strong>. The abattoir records the carcass and cuts, and cafés order them from your meat list.</p>}
@@ -388,7 +392,7 @@ function CreateBatchForm({ farmerToken, season, setSeason, onBatchCreated, onSuc
               required
             >
               {units.map(u => (
-                <option key={u} value={u}>{u}</option>
+                <option key={u} value={u}>{UNIT_LABEL[u] || u}</option>
               ))}
             </select>
             )}

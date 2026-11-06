@@ -1,6 +1,9 @@
 // Shared helpers for pages that use a wallet (Supply Chain, Admin, Farmer sign-in)
 import axios from 'axios';
 import { ethers } from 'ethers';
+import { createElement } from 'react';
+import { createRoot } from 'react-dom/client';
+import Maru from './Maru';
 
 export const API_BASE = 'https://farm-passport-backend-v3.onrender.com/api';
 export const EXPLORER = 'https://sepolia.basescan.org';
@@ -200,39 +203,50 @@ export async function writeNfcUrl(url) {
 }
 
 // ─────────────────────────────────────────────
-// v4.4 — friendlier waiting. When a request to Farm Passport takes a while, a small note appears at the bottom
-// of the screen saying why: recording on the blockchain (about 5 seconds), or the server waking up after a quiet
-// spell (up to about 30 seconds). Installed once, for every page that uses axios.
+// v4.4c — friendlier waiting. When a request to Farm Passport takes a while, Maru appears in the middle of the
+// screen, slowly wagging his tail while his eyes go round, with a short line saying why:
+//   signing in → "Signing you in…" · saving to the blockchain → "Saving to the blockchain…"
+//   a long wait (the server waking up after a quiet spell) → "Waking up Farm Passport…" · anything else → "Just a moment…"
+// Installed once, for every page that uses axios. It never blocks clicks.
 // ─────────────────────────────────────────────
+const SIGN_IN = /(login|log-in|signin|sign-in|register|verify|nonce|auth|session|magic)/i;
+const ON_CHAIN = /(create-batch|dispatch|receive|create-receipt|claim|recall|process|slaughter|forward|confirm-return|return|kill|carcass|cut|checkpoint|deliver|batch\/.*\/(deal|split)|write-off|wasted)/i;
 if (typeof window !== 'undefined' && !window.__fpSlowNote) {
   window.__fpSlowNote = true;
   const pending = new Map();
-  let seq = 0, el = null, timer = null;
+  let seq = 0, el = null, label = null, timer = null;
   const ours = (url) => String(url || '').startsWith(API_BASE.replace(/\/api$/, ''));
   const render = () => {
     const now = Date.now();
-    const slow = [...pending.values()].filter(p => now - p.t > 2500);
+    const slow = [...pending.values()].filter(p => now - p.t > 1500);
     if (!slow.length) { if (el) el.style.display = 'none'; if (!pending.size && timer) { clearInterval(timer); timer = null; } return; }
-    const writing = slow.some(p => p.write);
-    const long = slow.some(p => now - p.t > 7000);
-    const text = writing && !long ? '⛓️ Recording on the blockchain… this usually takes about 5 seconds'
-      : long ? '☕ Waking up Farm Passport… after a quiet spell this can take up to 30 seconds. Thanks for waiting!'
-      : '⏳ Still loading…';
+    const long = slow.some(p => now - p.t > 8000);
+    const text = long ? 'Waking up Farm Passport… this can take up to 30 seconds'
+      : slow.some(p => p.signIn) ? 'Signing you in…'
+      : slow.some(p => p.chain) ? 'Saving to the blockchain…'
+      : 'Just a moment…';
     if (!el) {
       el = document.createElement('div');
       el.setAttribute('role', 'status');
-      el.style.cssText = 'position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:9999;max-width:calc(100% - 32px);'
-        + 'background:#1C2A1F;color:#F6F6F2;padding:10px 16px;border-radius:12px;font:600 14px/1.35 Manrope,system-ui,sans-serif;'
-        + 'box-shadow:0 10px 30px rgba(0,0,0,.25);text-align:center';
+      el.setAttribute('aria-live', 'polite');
+      el.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:9999;pointer-events:none;'
+        + 'background:rgba(255,255,255,.96);border:1px solid rgba(0,0,0,.06);border-radius:24px;padding:18px 26px 16px;'
+        + 'box-shadow:0 20px 50px rgba(0,0,0,.18);text-align:center;width:220px;max-width:calc(100% - 32px)';
+      const cat = document.createElement('div');
+      label = document.createElement('p');
+      label.style.cssText = 'margin:6px 0 0;font:600 14px/1.35 Manrope,system-ui,sans-serif;color:#2E3A30';
+      el.appendChild(cat); el.appendChild(label);
       document.body.appendChild(el);
+      createRoot(cat).render(createElement(Maru, { mode: 'loading', size: 120 }));
     }
-    el.textContent = text;
+    label.textContent = text;
     el.style.display = 'block';
   };
   axios.interceptors.request.use((cfg) => {
     if (ours(cfg.url)) {
       cfg.__fpId = ++seq;
-      pending.set(cfg.__fpId, { t: Date.now(), write: (cfg.method || 'get').toLowerCase() !== 'get' });
+      const write = (cfg.method || 'get').toLowerCase() !== 'get';
+      pending.set(cfg.__fpId, { t: Date.now(), signIn: SIGN_IN.test(cfg.url), chain: write && ON_CHAIN.test(cfg.url) && !SIGN_IN.test(cfg.url) });
       if (!timer) timer = setInterval(render, 500);
     }
     return cfg;
