@@ -3,6 +3,7 @@ import axios from 'axios';
 import { ethers } from 'ethers';
 import JourneyTimeline from './JourneyTimeline';
 import ProcessorPanel from './ProcessorPanel';
+import DashShell, { PageTitle, Panel } from './DashShell';
 import {
   API_BASE, EXPLORER, hasWallet, shortAddr, toScaled, formatQty, lastStepText, shortWhen,
   connectMetaMask, supplyChainWithSigner, sendAndConfirm, walletError,
@@ -16,7 +17,7 @@ import {
  * (Old /checkpoint?batch=... sticker links open this page too.)
  * Restaurants don't need this page — they confirm deliveries in the Restaurant portal.
  */
-function SupplyChainPage({ onBack }) {
+function SupplyChainPage({ onBack, onHome, topNav = null }) {
   const params = new URLSearchParams(window.location.search);
   const urlShipment = params.get('shipment');
   const urlBatch = params.get('batch');
@@ -99,25 +100,191 @@ function SupplyChainPage({ onBack }) {
   const holding = inbound.filter(s => s.status === 'delivered' && s.available > 0);
   const handlingStages = (who?.stages || []);
 
-  return (
-    <div className="max-w-2xl mx-auto space-y-6">
+  // ── Pieces used below ──
+  const pausedNote = config?.paused && (
+    <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-4">
+      <p className="text-yellow-800 font-semibold">⏸️ Recording is paused right now. Please try again later.</p>
+    </div>
+  );
+  const stickerShipment = urlShipment && focusShipment && (
+    focusShipment.error ? (
+      <div className="bg-white rounded-lg shadow-lg p-6"><p className="text-red-600">⚠️ {focusShipment.error}</p></div>
+    ) : (
+      <ShipmentPanel title="📦 This shipment" shipment={focusShipment} account={account} who={who} canAct={canAct}
+        config={config} participants={participants} onDone={refresh} />
+    )
+  );
+  const stickerJourney = focusShipment && !focusShipment.error && <JourneyTimeline batchId={focusShipment.batchId} refreshKey={refreshKey} />;
+  const stickerLinks = who?.authorized && (urlShipment || urlBatch) && (
+    <details className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-sm">
+      <summary className="font-semibold text-gray-700 cursor-pointer">🏷️ NFC sticker links for this page</summary>
+      <p className="mt-2 text-gray-700 font-semibold">Opens in the MetaMask app (recommended for phones):</p>
+      <p className="font-mono text-xs break-all bg-white border rounded p-2">{metamaskLink}</p>
+      <p className="mt-2 text-gray-700 font-semibold">Opens in the normal browser:</p>
+      <p className="font-mono text-xs break-all bg-white border rounded p-2">{pageUrl}</p>
+    </details>
+  );
 
-      <div className="bg-white rounded-lg shadow-lg p-6">
-        <h2 className="text-2xl font-bold text-gray-800">🚚 Supply Chain</h2>
-        <p className="text-gray-600 text-sm mt-1">
-          For depots, drivers and farms with a wallet. Restaurants: use the 🍽️ Restaurant portal instead.
-        </p>
-      </div>
-
-      {config?.paused && (
-        <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-4">
-          <p className="text-yellow-800 font-semibold">⏸️ Recording is paused right now. Please try again later.</p>
+  // Depots & couriers: what's arriving, in stock, being carried for others, and history
+  const needsCatchUp = (s) => s.status === 'delivered' && (!s.carrierSteps?.arrived || !s.carrierSteps?.out);
+  const carryingNow = carrying.filter(s => s.status === 'in_transit' || needsCatchUp(s));
+  const history = [
+    ...outbound.map(s => ({ ...s, kind: 'sent' })),
+    ...carrying.filter(s => s.status !== 'in_transit' && !needsCatchUp(s)).map(s => ({ ...s, kind: 'carried' })),
+  ].sort((a, b) => b.shipmentId - a.shipmentId);
+  const section = ({ title, hint, items, empty }) => (   // plain function so open forms aren't reset
+    <div className="bg-white rounded-lg shadow-lg p-6">
+      <h3 className="text-lg font-bold text-gray-800 mb-1">{title} ({items.length})</h3>
+      {hint && <p className="text-sm text-gray-500 mb-3">{hint}</p>}
+      {items.length === 0 ? <p className="text-sm text-gray-500">{empty}</p> : (
+        <div className="space-y-3">
+          {items.map(s => (
+            <ShipmentPanel key={s.shipmentId} shipment={s} account={account} who={who} canAct={canAct}
+              config={config} participants={participants} onDone={refresh} compact />
+          ))}
         </div>
       )}
+    </div>
+  );
+  const historyList = (
+    <div className="bg-white rounded-lg shadow-lg p-6">
+      <p className="text-sm text-gray-500 mb-3">What you've sent on and what you've carried, with how it ended up.</p>
+      {history.length === 0 ? <p className="text-sm text-gray-500">Nothing yet.</p> : (
+        <div className="divide-y divide-gray-100">
+          {history.map(s => (
+            <div key={`${s.kind}-${s.shipmentId}`} className="py-3 flex justify-between gap-3 flex-wrap">
+              <div className="min-w-0">
+                <p className="font-semibold text-gray-800">#{s.shipmentId} · {formatQty(s.quantitySent, s.unit)} {s.productName} → {s.toName}</p>
+                <p className="text-xs text-gray-500">{s.kind === 'sent' ? 'Sent by you' : `Carried for ${s.fromName}`} · {new Date(s.createdAt).toLocaleDateString('en-GB')}</p>
+                {s.status === 'delivered' && (
+                  <p className={`text-xs ${s.shortfall > 0 ? 'text-orange-600 font-semibold' : 'text-gray-500'}`}>
+                    Received {formatQty(s.quantityReceived, s.unit)}{s.quantityRejected > 0 ? ` · ${formatQty(s.quantityRejected, s.unit)} refused` : ''}{s.shortfall > 0 ? ` · ⚠️ ${formatQty(s.shortfall, s.unit)} missing` : ''}
+                    {s.deliveryNotes ? ` · "${s.deliveryNotes}"` : ''}
+                  </p>
+                )}
+                {s.kind === 'carried' && s.status === 'delivered' && !s.carrierSteps?.out && (
+                  <p className="text-xs text-amber-700">⚠️ Delivered before you logged "Out for delivery"</p>
+                )}
+              </div>
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full h-fit ${
+                s.status === 'delivered' ? 'bg-green-100 text-green-700' : s.status === 'in_transit' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                {s.status === 'delivered' ? 'Delivered' : s.status === 'in_transit' ? 'On its way' : 'Cancelled'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  // ── v4.5: a signed-in wallet gets the dashboard frame (sidebar / bottom bar) ──
+  const [stab, setStabState] = useState(() => { try { return sessionStorage.getItem('fp_supply_tab') || null; } catch { return null; } });
+  const [procData, setProcData] = useState(null);
+  const setStab = (t) => { setStabState(t); try { sessionStorage.setItem('fp_supply_tab', t); } catch { /* fine */ } window.scrollTo({ top: 0 }); };
+  const [ptab, setPtab] = useState(() => {
+    try { const t = sessionStorage.getItem('fp_proc_tab'); return ['today', 'animals', 'kill', 'stock', 'orders', 'settings', 'history'].includes(t) ? t : 'today'; } catch { return 'today'; }
+  });
+  const goProc = (t) => { setPtab(t); try { sessionStorage.setItem('fp_proc_tab', t); } catch { /* fine */ } window.scrollTo({ top: 0 }); };
+
+  if (account && who?.authorized) {
+    const roleName = who.processor ? `Abattoir · ${who.processor.approvalNumber}` : who.role === 'farmer' ? 'Farm (wallet)' : who.role === 'restaurant' ? 'Restaurant' : `Handler · ${handlingStages.join(', ') || 'receive & forward'}`;
+    const shellProps = {
+      who: { name: who.name, sub: roleName, status: config?.paused ? 'wait' : 'ok' },
+      onHome: onHome || onBack, onLogout: () => { setAccount(null); onBack?.(); },
+    };
+    const top = <>{pausedNote}{stickerShipment}</>;
+    const bottom = <>{stickerJourney}{stickerLinks}</>;
+
+    if (who.processor) {
+      const r = procData;
+      const nav = [
+        { key: 'today', icon: '☀️', label: 'Today' },
+        { key: 'animals', icon: '🐄', label: 'Animals in', badge: r?.animalsComing?.length || null },
+        { key: 'kill', icon: '📋', label: 'Kill sheet', badge: r?.animalsHere?.length || null },
+        { key: 'stock', icon: '🥩', label: 'Carcasses & cuts' },
+        { key: 'orders', icon: '🧾', label: 'Café orders', badge: (r?.orders || []).filter(o => o.ready).length || null },
+        { key: 'history', icon: '📚', label: who.role === 'handler' ? 'Carrying & history' : 'Sent history', badge: who.role === 'handler' ? (carryingNow.length || null) : null },
+      ];
+      const titles = { today: ['Today', r?.me?.name ? `Today at ${r.me.name}` : 'Today'], animals: ['Animals sent to you', 'Animals in'], kill: ['Record each animal killed', 'Kill sheet'],
+        stock: ['What you’ve made, and labels', 'Carcasses & cuts'], orders: ['Pack and send to cafés', 'Café orders'], settings: ['Email alerts and the blockchain', 'Settings'], history: ['Shipments you carry and have sent', who.role === 'handler' ? 'Carrying & history' : 'Sent history'] };
+      return (
+        <DashShell {...shellProps} nav={nav} phone={['today', 'animals', 'kill', 'orders']} active={ptab} onNav={goProc}
+          extras={[{ key: 'settings', icon: '⚙️', label: 'Settings', active: ptab === 'settings', onClick: () => goProc('settings') }]}
+          tips={['Animals arrive with their FCI: check it before the kill.', 'Each kill sheet row gets its own kill number, printed on every label.', 'Print labels from Carcasses & cuts: every one has a QR code to the journey.', 'Café orders turn “Ready to pack” once the cuts exist.']}>
+          <div className="fp-page space-y-6">
+            <PageTitle kicker={ptab === 'today' ? new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }) : titles[ptab]?.[0]} title={titles[ptab]?.[1]} />
+            {top}
+            <div className={ptab === 'history' ? 'hidden' : ''}>
+              <ProcessorPanel account={account} participants={participants} framed tab={ptab === 'history' ? 'today' : ptab} onTab={goProc} onData={setProcData} />
+            </div>
+            {ptab === 'history' && who.role === 'handler' && section({ title: 'Carrying for others', items: carryingNow, hint: 'Shipments going to someone else via you. Record each step as you collect, store and hand them over — the receiver confirms delivery. If something was delivered before you logged it, catch up the missed steps here.', empty: 'Nothing to carry right now.' })}
+            {ptab === 'history' && historyList}
+            {bottom}
+          </div>
+        </DashShell>
+      );
+    }
+
+    if (who.role === 'farmer') {
+      return (
+        <DashShell {...shellProps} nav={[{ key: 'steps', icon: '📍', label: 'Farm steps' }]} active="steps" onNav={() => {}}>
+          <div className="fp-page space-y-6">
+            <PageTitle kicker="Record what happens on the farm" title="Farm steps" />
+            {top}
+            <FarmSteps batches={farmBatches} preselect={urlBatch} canAct={canAct} config={config} onDone={refresh} />
+            {bottom}
+          </div>
+        </DashShell>
+      );
+    }
+
+    // Depots, drivers & other handlers
+    const isHandler = who.role === 'handler';
+    const t = [...(isHandler ? ['run'] : []), 'arriving', 'stock', 'history'].includes(stab) ? stab : (isHandler ? 'run' : 'arriving');
+    const nav = [
+      ...(isHandler ? [{ key: 'run', icon: '🚚', label: 'Today’s run', badge: carryingNow.length || null }] : []),
+      { key: 'arriving', icon: '📥', label: 'Arriving', badge: incoming.length || null },
+      { key: 'stock', icon: '📦', label: 'In stock' },
+      { key: 'history', icon: '📚', label: 'History' },
+    ];
+    return (
+      <DashShell {...shellProps} nav={nav} phone={isHandler ? ['arriving', 'stock', 'run', 'history'] : ['arriving', 'stock', 'history']} active={t} onNav={setStab}
+        tips={['Tap “Arrived with us” when a crate reaches you, then “Out for delivery” when it leaves.', 'Missed a step? You can still log it after delivery: it’s marked as late.', 'Scan the sticker on a crate to open that delivery straight away.']}>
+        <div className="fp-page space-y-6">
+          {t === 'run' && <PageTitle kicker={`${carryingNow.length} to carry`} title="Today’s run" />}
+          {t === 'arriving' && <PageTitle kicker="Sent to you" title="Arriving" />}
+          {t === 'stock' && <PageTitle kicker="Received and waiting to go on" title="In stock" />}
+          {t === 'history' && <PageTitle kicker="Sent on and carried" title="History" />}
+          {top}
+          {t === 'run' && section({ title: 'Carrying for others', items: carryingNow, hint: 'Shipments going to someone else via you. Record each step as you collect, store and hand them over — the receiver confirms delivery. If something was delivered before you logged it, catch up the missed steps here.', empty: 'Nothing to carry right now.' })}
+          {t === 'arriving' && section({ title: 'Arriving', items: incoming, hint: 'Stock sent to you. Confirm how much arrived when it gets here.', empty: 'Nothing on its way to you.' })}
+          {t === 'stock' && section({ title: 'In stock', items: holding, hint: "Stock you've received. Send some on to a business when it leaves.", empty: 'Nothing in stock.' })}
+          {t === 'history' && historyList}
+          {bottom}
+        </div>
+      </DashShell>
+    );
+  }
+
+  // ── Not signed in yet: connect a wallet (the normal frame with the top bar) ──
+  return (
+    <div className={topNav ? 'fp-app min-h-screen bg-gray-50 px-3 sm:px-4 pt-3 pb-24' : ''}>
+    {topNav}
+    <div className="fp-page max-w-2xl mx-auto space-y-6">
+
+      <div className="relative overflow-hidden bg-white rounded-3xl border border-black/5 p-6">
+        <div className="fp-glow" aria-hidden="true" />
+        <div className="relative">
+          <h2 className="fp-gradient text-3xl font-extrabold tracking-tight">🚚 Supply chain</h2>
+          <p className="text-gray-600 text-sm mt-1">For abattoirs, depots, drivers and farms with a wallet. Restaurants: use the 🍽️ Restaurant portal instead.</p>
+        </div>
+      </div>
+
+      {pausedNote}
 
       {/* Wallet */}
       <div className="bg-white rounded-lg shadow-lg p-6">
-        <h3 className="text-lg font-bold text-gray-800 mb-3">1. Connect wallet</h3>
+        <h3 className="text-lg font-bold text-gray-800 mb-3">Connect your wallet</h3>
         {!hasWallet() ? (
           <div className="space-y-3">
             <p className="text-gray-600 text-sm">No wallet found in this browser. On a phone, open this page in the MetaMask app:</p>
@@ -132,11 +299,6 @@ function SupplyChainPage({ onBack }) {
               <p className="text-sm text-gray-500">Checking permissions…</p>
             ) : who.error ? (
               <p className="text-sm text-red-600">⚠️ {who.error} <button onClick={refresh} className="text-blue-600 hover:underline ml-1">Try again</button></p>
-            ) : who.authorized ? (
-              <p className="text-sm text-green-700 font-semibold">
-                ✅ {who.name} · {who.role === 'farmer' ? 'farm' : who.role === 'restaurant' ? 'restaurant' : `handler (${handlingStages.join(', ') || 'receive & forward'})`}
-                {who.processor && ` · slaughterhouse / processor ${who.processor.approvalNumber}`}
-              </p>
             ) : (
               <p className="text-sm text-red-600 font-semibold">⛔ This wallet isn't registered on the supply chain. Switch wallet in MetaMask.</p>
             )}
@@ -145,123 +307,13 @@ function SupplyChainPage({ onBack }) {
         {walletErr && <p className="text-sm text-red-600 mt-2">⚠️ {walletErr}</p>}
       </div>
 
-      {/* Opened from a sticker: one shipment */}
-      {urlShipment && focusShipment && (
-        focusShipment.error ? (
-          <div className="bg-white rounded-lg shadow-lg p-6"><p className="text-red-600">⚠️ {focusShipment.error}</p></div>
-        ) : (
-          <ShipmentPanel
-            title="📦 This shipment"
-            shipment={focusShipment}
-            account={account}
-            who={who}
-            canAct={canAct}
-            config={config}
-            participants={participants}
-            onDone={refresh}
-          />
-        )
-      )}
-
-      {/* Abattoirs / cutting plants: animals in, kill sheet, cutting, sending out */}
-      {account && who?.authorized && who.processor && (
-        <ProcessorPanel account={account} participants={participants} />
-      )}
-
-      {/* Work for this wallet: arriving → in stock → carrying for others → history */}
-      {account && who?.authorized && who.role !== 'farmer' && (() => {
-        // Delivered before the depot logged its steps → stays here so they can be caught up
-        const needsCatchUp = (s) => s.status === 'delivered' && (!s.carrierSteps?.arrived || !s.carrierSteps?.out);
-        const carryingNow = carrying.filter(s => s.status === 'in_transit' || needsCatchUp(s));
-        const history = [
-          ...outbound.map(s => ({ ...s, kind: 'sent' })),
-          ...carrying.filter(s => s.status !== 'in_transit' && !needsCatchUp(s)).map(s => ({ ...s, kind: 'carried' })),
-        ].sort((a, b) => b.shipmentId - a.shipmentId);
-        const section = ({ n, title, hint, items, empty }) => (   // plain function so open forms aren't reset
-          <div className="bg-white rounded-lg shadow-lg p-6">
-            <h3 className="text-lg font-bold text-gray-800 mb-1">{n}. {title} ({items.length})</h3>
-            {hint && <p className="text-sm text-gray-500 mb-3">{hint}</p>}
-            {items.length === 0 ? <p className="text-sm text-gray-500">{empty}</p> : (
-              <div className="space-y-3">
-                {items.map(s => (
-                  <ShipmentPanel key={s.shipmentId} shipment={s} account={account} who={who} canAct={canAct}
-                    config={config} participants={participants} onDone={refresh} compact />
-                ))}
-              </div>
-            )}
-          </div>
-        );
-        return (
-          <>
-            {/* Processors manage arrivals and stock in the panel above */}
-            {!who.processor && section({ n: 2, title: "Arriving", items: incoming, hint: "Stock sent to you. Confirm how much arrived when it gets here.", empty: "Nothing on its way to you." })}
-            {!who.processor && section({ n: 3, title: "In stock", items: holding, hint: "Stock you've received. Send some on to a business when it leaves.", empty: "Nothing in stock." })}
-            {who.role === 'handler' && (
-              section({ n: 4, title: "Carrying for others", items: carryingNow, hint: "Shipments going to someone else via you. Record each step as you collect, store and hand them over — the receiver confirms delivery. If something was delivered before you logged it, catch up the missed steps here.", empty: "Nothing to carry right now." })
-            )}
-            <details className="bg-white rounded-lg shadow-lg p-6">
-              <summary className="text-lg font-bold text-gray-800 cursor-pointer">
-                {who.role === 'handler' ? 5 : 4}. History ({history.length})
-              </summary>
-              <p className="text-sm text-gray-500 mt-1 mb-3">What you've sent on and what you've carried, with how it ended up.</p>
-              {history.length === 0 ? <p className="text-sm text-gray-500">Nothing yet.</p> : (
-                <div className="divide-y divide-gray-100">
-                  {history.map(s => (
-                    <div key={`${s.kind}-${s.shipmentId}`} className="py-3 flex justify-between gap-3 flex-wrap">
-                      <div className="min-w-0">
-                        <p className="font-semibold text-gray-800">
-                          #{s.shipmentId} · {formatQty(s.quantitySent, s.unit)} {s.productName} → {s.toName}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          {s.kind === 'sent' ? 'Sent by you' : `Carried for ${s.fromName}`} · {new Date(s.createdAt).toLocaleDateString('en-GB')}
-                        </p>
-                        {s.status === 'delivered' && (
-                          <p className={`text-xs ${s.shortfall > 0 ? 'text-orange-600 font-semibold' : 'text-gray-500'}`}>
-                            Received {formatQty(s.quantityReceived, s.unit)}{s.quantityRejected > 0 ? ` · ${formatQty(s.quantityRejected, s.unit)} refused` : ''}{s.shortfall > 0 ? ` · ⚠️ ${formatQty(s.shortfall, s.unit)} missing` : ''}
-                            {s.deliveryNotes ? ` · "${s.deliveryNotes}"` : ''}
-                          </p>
-                        )}
-                        {s.kind === 'carried' && s.status === 'delivered' && !s.carrierSteps?.out && (
-                          <p className="text-xs text-amber-700">⚠️ Delivered before you logged "Out for delivery"</p>
-                        )}
-                      </div>
-                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full h-fit ${
-                        s.status === 'delivered' ? 'bg-green-100 text-green-700' : s.status === 'in_transit' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
-                        {s.status === 'delivered' ? 'Delivered' : s.status === 'in_transit' ? 'On its way' : 'Cancelled'}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </details>
-          </>
-        );
-      })()}
-
-      {/* Farms: record a "Farm" step on their own batches */}
-      {account && who?.role === 'farmer' && (
-        <FarmSteps batches={farmBatches} preselect={urlBatch} canAct={canAct} config={config} onDone={refresh} />
-      )}
-
-      {/* Journey of the shipment's batch */}
-      {focusShipment && !focusShipment.error && (
-        <JourneyTimeline batchId={focusShipment.batchId} refreshKey={refreshKey} />
-      )}
-
-      {/* Sticker link for this page */}
-      {who?.authorized && (urlShipment || urlBatch) && (
-        <details className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-sm">
-          <summary className="font-semibold text-gray-700 cursor-pointer">🏷️ NFC sticker links for this page</summary>
-          <p className="mt-2 text-gray-700 font-semibold">Opens in the MetaMask app (recommended for phones):</p>
-          <p className="font-mono text-xs break-all bg-white border rounded p-2">{metamaskLink}</p>
-          <p className="mt-2 text-gray-700 font-semibold">Opens in the normal browser:</p>
-          <p className="font-mono text-xs break-all bg-white border rounded p-2">{pageUrl}</p>
-        </details>
-      )}
+      {stickerShipment}
+      {stickerJourney}
 
       <div className="text-center">
         <button onClick={onBack} className="text-gray-600 hover:underline">← Back</button>
       </div>
+    </div>
     </div>
   );
 }

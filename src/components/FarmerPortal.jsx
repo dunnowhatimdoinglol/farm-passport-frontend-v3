@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import FarmerDashboard from './FarmerDashboard';
 import axios from 'axios';
 import { ethers } from 'ethers';
 import { walletSignIn, hasWallet, connectMetaMask, metaMaskSign, walletError } from './walletHelpers';
 
-function FarmerPortal({ onBackToCustomer, startOn = null }) {
+function FarmerPortalInner({ onBackToCustomer, startOn = null, onDashboard }) {
   const [view, setView] = useState(startOn === 'register' ? 'register' : 'login');
   const [privateKey, setPrivateKey] = useState('');
   const [farmerAddress, setFarmerAddress] = useState('');
@@ -159,6 +159,9 @@ function FarmerPortal({ onBackToCustomer, startOn = null }) {
     setRegistrationData(null);
     setError('');
   };
+
+  // v4.5: the dashboard fills the screen (its own sidebar); sign-in pages keep the top bar
+  useEffect(() => { onDashboard?.(view === 'dashboard'); }, [view]);
 
   if (view === 'dashboard') {
     return (
@@ -517,6 +520,20 @@ function FarmerPortal({ onBackToCustomer, startOn = null }) {
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// v4.5: signed out, the farm pages sit in the normal frame with the top bar; signed in, the dashboard takes the whole screen.
+// (The inner part stays mounted either way, so signing in isn't lost when the frame changes.)
+function FarmerPortal({ topNav = null, ...props }) {
+  const [inDash, setInDash] = useState(false);
+  return (
+    <div className={inDash || !topNav ? '' : 'fp-app min-h-screen bg-gray-50 px-3 sm:px-4 pt-3 pb-24'}>
+      {!inDash && topNav}
+      <div className={inDash || !topNav ? '' : 'fp-page max-w-4xl mx-auto'}>
+        <FarmerPortalInner {...props} onDashboard={setInDash} />
       </div>
     </div>
   );

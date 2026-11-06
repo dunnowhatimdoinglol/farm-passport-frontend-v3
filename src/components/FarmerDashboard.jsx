@@ -7,9 +7,11 @@ import { formatQty, batchLink, API_BASE } from './walletHelpers';
 import NfcShare from './NfcShare';
 import { ChainHelp } from './ChainProof';
 import { useAsk } from './Ask';
+import DashShell, { FP, PageTitle, StatTile, Panel, UseByBar, greeting, todayLabel } from './DashShell';
+import Maru from './Maru';
 
 // farmerToken = sign-in token from FarmerPortal (the private key is never sent to the server)
-function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogout }) {
+function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogout, onBack }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [farmerData, setFarmerData] = useState(null);
@@ -172,7 +174,8 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
 
   if (loading && !farmerData) {
     return (
-      <div className="max-w-6xl mx-auto">
+      <div className="fp-app min-h-screen bg-gray-50 flex items-center justify-center p-4">
+      <div className="max-w-md w-full">
         <div className="bg-white rounded-lg shadow-lg p-8 text-center">
           <div className="animate-pulse">
             <div className="text-4xl mb-4">👨‍🌾</div>
@@ -180,12 +183,14 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
           </div>
         </div>
       </div>
+      </div>
     );
   }
 
   if (error) {
     return (
-      <div className="max-w-6xl mx-auto">
+      <div className="fp-app min-h-screen bg-gray-50 flex items-center justify-center p-4">
+      <div className="max-w-md w-full">
         <div className="bg-red-100 border border-red-400 rounded-lg p-6">
           <h3 className="font-bold text-red-700 mb-2">Error Loading Dashboard</h3>
           <p className="text-red-600 mb-4">{error}</p>
@@ -196,6 +201,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
             ← Back to Login
           </button>
         </div>
+      </div>
       </div>
     );
   }
@@ -288,8 +294,36 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
     }
   };
 
+  // v4.5: the dashboard frame — sidebar on a computer, bottom bar on a phone
+  const counts = tabCounts(todo);
+  const nav = [
+    { key: 'today',      icon: '☀️', label: 'Today' },
+    { key: 'add',        icon: '➕', label: 'Add stock' },
+    { key: 'stock',      icon: '🧺', label: 'Stock' },
+    { key: 'orders',     icon: '🧾', label: 'Orders', badge: counts.orders || null },
+    { key: 'deliveries', icon: '🚚', label: 'Deliveries', badge: counts.deliveries || null },
+    ...(approved ? [{ key: 'meat', icon: '🥩', label: 'Meat prices' }] : []),
+    { key: 'money',      icon: '💷', label: 'Money' },
+    { key: 'farm',       icon: '🌾', label: 'Farm profile' },
+  ];
+  const onNav = (k) => {
+    if (k === 'add') { if (!approved) { setTab('stock', 'all'); return; } setTab('stock', 'all'); setShowCreateBatch(true); return; }
+    setTab(k);
+  };
   return (
-    <div className="max-w-6xl mx-auto">
+    <DashShell
+      who={{ name: farmer.farmName || 'Your farm', sub: `${farmer.location ? `${farmer.location} · ` : ''}${approved ? 'approved' : 'waiting for approval'}`, status: approved ? 'ok' : 'wait' }}
+      nav={nav} phone={['today', 'stock', 'add', 'orders']} active={tab === 'stock' && showCreateBatch ? 'add' : tab} onNav={onNav}
+      extras={[{ key: 'alerts', icon: '🔔', label: 'Email alerts', active: tab === 'alerts', onClick: () => setTab('alerts') }]}
+      onHome={onBack || onLogout} onLogout={onLogout}
+      tips={[
+        '“Same as last time” fills in a product, unit and price in one tap.',
+        'Set a price on each batch: cafés only see prices you set.',
+        'Close to the use-by? Make it a deal and cafés see it first.',
+        'When a café orders, the soonest use-by is picked for you.',
+        'Your farm bio shows on every product page diners scan.',
+      ]}>
+    <div className="fp-page">
       {askNode}
       
       {/* Email Verification Warning */}
@@ -340,23 +374,6 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
         </div>
       )}
 
-      {/* Header */}
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-800">Farmer Dashboard</h1>
-          <p className="text-gray-600">Welcome back, {farmer.farmName}!</p>
-        </div>
-        <button
-          onClick={onLogout}
-          className="bg-gray-600 text-white px-6 py-2 rounded-lg hover:bg-gray-700 transition"
-        >
-          Logout
-        </button>
-      </div>
-
-      {/* Tabs */}
-      <DashboardTabs tab={tab} setTab={setTab} approved={approved} counts={tabCounts(todo)} />
-
       {(tab === 'today' || (tab === 'meat' && !approved)) && (
         <div className="mb-4">
           <Checklist storageKey={`fp_farm_checklist_${farmer.address}`} title="Getting started on Farm Passport" steps={[
@@ -369,11 +386,12 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
         </div>
       )}
       {(tab === 'today' || (tab === 'meat' && !approved)) && (
-        <TodayPanel todo={todo} batches={batches} approved={approved} farmName={farmer.farmName} go={setTab}
+        <TodayPanel todo={todo} batches={batches} approved={approved} farmName={farmer.farmName} go={setTab} ask={ask}
           onCreate={() => { setTab('stock', 'all'); setShowCreateBatch(true); }} />
       )}
 
       {tab === 'farm' && (<>
+      <PageTitle kicker="What diners and cafés see" title="Farm profile" />
       {/* Farm Overview Card */}
       <div className="bg-gradient-to-r from-green-600 to-green-700 text-white rounded-lg shadow-lg p-6 mb-6">
         <div className="flex items-start justify-between">
@@ -492,17 +510,24 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
 
       {/* How to check records on the blockchain */}
       <ChainHelp who="farm" className="mb-6" />
-      <AlertSettings token={farmerToken} className="mb-6" />
       </>)}
 
       {/* Orders from restaurants */}
-      {tab === 'orders' && <MoneyPanel orders={todo?.orders || []} />}
+      {tab === 'money' && <><PageTitle kicker="What cafés owe you, and what's been paid" title="Money" /><MoneyPanel orders={todo?.orders || []} /></>}
+      {tab === 'orders' && <PageTitle kicker="From local cafés" title="Orders" />}
       {tab === 'orders' && <FarmerOrders farmerToken={farmerToken} approved={approved} refreshKey={refreshTrigger} onChanged={refreshAll} />}
 
       {/* Meat prices (what cafés can order) + cutting list (what they've pre-ordered) */}
+      {tab === 'meat' && approved && <PageTitle kicker="What cafés can order from your animals" title="Meat prices" />}
       {tab === 'meat' && approved && <FarmerMeatList farmerToken={farmerToken} refreshKey={refreshTrigger} />}
 
+      {tab === 'alerts' && (<>
+        <PageTitle kicker={farmer.email || farmer.farmName} title="Email alerts" />
+        <AlertSettings token={farmerToken} className="mb-6" />
+      </>)}
+
       {tab === 'deliveries' && (<>
+        <PageTitle kicker="Coming in to you, and what you've sent" title="Deliveries" />
         {/* Coming in to the farm: boxed meat from the abattoir, returns, refused goods coming back — confirm, then they leave the list */}
         <FarmerComingIn farmerToken={farmerToken} refreshKey={refreshTrigger} onChanged={refreshAll} />
         {/* Shipments sent */}
@@ -512,6 +537,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
         )}
       </>)}
 
+      {tab === 'stock' && <PageTitle kicker={showCreateBatch && approved ? 'Register a new batch' : 'Everything you have to sell'} title={showCreateBatch && approved ? 'Add stock' : 'Stock'} />}
       {tab === 'stock' && (() => {
         // v4.3: one Stock tab with filters — your batches (produce, animals) and boxed meat / returns held from deliveries
         const held = (todo?.inbound || []).filter(x => x.status === 'delivered' && x.available > 0);
@@ -874,6 +900,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
       <WriteOffLog farmerToken={farmerToken} refreshKey={refreshTrigger} />
       </>)}
     </div>
+    </DashShell>
   );
 }
 
@@ -884,6 +911,7 @@ function FarmerDashboard({ farmerToken, farmerAddress, season, setSeason, onLogo
 const TABS = [
   ['today', '🏠', 'Today'], ['stock', '📦', 'Stock'], ['orders', '🧾', 'Orders'],
   ['deliveries', '🚚', 'Deliveries'], ['meat', '🏷️', 'Meat prices'], ['farm', '🏡', 'Farm profile'],
+  ['money', '💷', 'Money'], ['alerts', '🔔', 'Email alerts'],   // v4.5: their own pages
 ];
 
 /** Things waiting for the farm, worked out from its orders and deliveries */
@@ -930,7 +958,7 @@ function DashboardTabs({ tab, setTab, approved, counts }) {
   );
 }
 
-function TodayPanel({ todo, batches, approved, farmName, go, onCreate }) {
+function TodayPanel({ todo, batches, approved, farmName, go, onCreate, ask }) {
   const n = needs(todo);
   const hour = new Date().getHours();
   const hello = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
@@ -969,62 +997,89 @@ function TodayPanel({ todo, batches, approved, farmName, go, onCreate }) {
       title: `${n.onTheWay.length} of your ${plural(n.onTheWay.length, 'delivery is', 'deliveries are')} on the way`, sub: 'Waiting for them to confirm what arrived.' },
   ].filter(Boolean);
   const todoCount = items.filter(i => i.tone !== 'info').length;
-  const TONE = {
-    urgent: 'border-orange-300 bg-orange-50', todo: 'border-amber-200 bg-amber-50', info: 'border-gray-200 bg-white',
-  };
+  const TONE = { urgent: 'border-red-200 bg-red-50', todo: 'border-amber-200 bg-amber-50', info: 'border-black/5 bg-gray-50' };
   const BTN = {
-    urgent: 'bg-orange-600 hover:bg-orange-700 text-white', todo: 'bg-green-600 hover:bg-green-700 text-white', info: 'border border-gray-300 text-gray-700 hover:bg-gray-50',
+    urgent: 'bg-red-600 hover:bg-red-700 text-white', todo: 'bg-green-600 hover:bg-green-700 text-white', info: 'bg-white border border-black/10 text-gray-700 hover:bg-gray-100',
   };
+  // v4.5: the numbers at the top, what to send, and your stock at a glance
+  const toSend = n ? [...n.newOrders, ...n.partSent] : [];
+  const sendValue = toSend.reduce((x, o) => x + (Number(o.estimate ?? o.total ?? 0) || (o.pricePerUnit ? o.pricePerUnit * (o.outstanding ?? o.quantity) : 0)), 0);
+  const owed = (todo?.orders || []).filter(o => ['dispatched', 'part_sent', 'closed_short'].includes(o.status) && o.paymentStatus !== 'paid');
+  const owedTotal = owed.reduce((x, o) => x + Number(o.owed ?? o.total ?? 0), 0);
+  const badges = batches.reduce((x, b) => x + (b.unlocks || 0), 0);
+  const stockList = batches.filter(b => live(b) && b.productType !== 'Livestock')
+    .sort((a, b) => (a.useBy ? new Date(a.useBy) : Infinity) - (b.useBy ? new Date(b.useBy) : Infinity)).slice(0, 5);
+  const star = [...batches].filter(b => b.unlocks > 0).sort((a, b) => b.unlocks - a.unlocks)[0];
+  const money = (v) => `£${(Math.round(v * 100) / 100).toFixed(2)}`;
+  const shortDay = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 
   return (
-    <div className="space-y-4 mb-6">
-      <div className="bg-white rounded-lg shadow-lg p-6">
-        <h2 className="text-2xl font-bold text-gray-800">{hello}, {farmName}</h2>
-        <p className="text-gray-600 mt-0.5">
-          {!n ? 'Checking what needs doing…' : todoCount ? `${todoCount} ${plural(todoCount, 'thing needs', 'things need')} doing.` : '✅ You’re all caught up. Nothing needs doing right now.'}
-        </p>
-        <div className="flex gap-2 mt-4 flex-wrap">
-          <button onClick={onCreate} disabled={!approved}
-            className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">➕ New batch</button>
-          {animals.length > 0 && approved && (
-            <button onClick={() => go('stock', 'animals')} className="bg-red-700 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-red-800">
-              🐄 Send animals to an abattoir</button>
-          )}
-          <button onClick={() => go('orders')} className="border border-gray-300 text-gray-700 text-sm font-semibold px-4 py-2 rounded-lg hover:bg-gray-50">🧾 All orders</button>
-        </div>
+    <div className="space-y-6 mb-6">
+      <PageTitle kicker={todayLabel()} title={`${hello}, ${farmName} 👋`}
+        actions={[
+          animals.length > 0 && approved && <button key="a" onClick={() => go('stock', 'animals')} className="px-4 py-2.5 rounded-xl text-sm font-semibold bg-white border border-black/10 hover:bg-gray-100">🐄 Send animals</button>,
+          <button key="n" onClick={onCreate} disabled={!approved} className="px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-green-600 hover:bg-green-700 shadow-md disabled:bg-gray-300 disabled:shadow-none">➕ Add stock</button>,
+        ].filter(Boolean)} />
+
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+        <StatTile icon="🧾" value={n ? toSend.length : '…'} label="Orders to send" sub={toSend.length ? `${sendValue ? `≈ ${money(sendValue)} · ` : ''}${new Set(toSend.map(o => o.restaurantName)).size} café${new Set(toSend.map(o => o.restaurantName)).size === 1 ? '' : 's'}` : 'All sent'} tone="honey" onClick={() => go('orders')} />
+        <StatTile icon="🧺" value={batches.filter(live).length} label="Batches in stock" sub={animals.length ? (() => { const k = animals.reduce((x, b) => x + Number(b.quantityRemaining ?? b.quantity), 0); return `${k} ${k === 1 ? 'animal' : 'animals'} on the farm`; })() : `${nearUseBy.length} near the use-by`} onClick={() => go('stock')} />
+        <StatTile icon="💷" value={money(owedTotal)} label="Owed to you" sub={`${owed.length} order${owed.length === 1 ? '' : 's'} not marked paid`} tone="white" onClick={() => go('money')} />
+        <StatTile icon="🏅" value={badges} label="Badges for your farm" sub="Collected by diners" tone="coral" onClick={() => go('farm')} />
       </div>
 
-      {!n ? (
-        <div className="bg-white rounded-lg shadow p-6 text-sm text-gray-500 animate-pulse">Loading your to-do list…</div>
-      ) : items.length > 0 && (
-        <div className="space-y-2">
-          {items.map((i, k) => (
-            <div key={k} className={`border-2 rounded-lg p-4 flex gap-3 items-start ${TONE[i.tone]}`}>
-              <span className="text-2xl leading-none">{i.icon}</span>
-              <div className="flex-1 min-w-0">
-                <p className="font-semibold text-gray-800">{i.title}</p>
-                {i.sub && <p className="text-sm text-gray-600 mt-0.5 break-words">{i.sub}</p>}
-                {/* On a phone the button sits under the text */}
-                <button onClick={() => go(i.tab)} className={`sm:hidden mt-2 text-sm font-semibold px-3 py-1.5 rounded-lg ${BTN[i.tone]}`}>{i.action} →</button>
+      <div className="grid xl:grid-cols-5 gap-4 items-start">
+        <Panel className="xl:col-span-3" title="✅ To do"
+          action={<span className="text-sm text-gray-500">{!n ? 'Checking…' : todoCount ? `${todoCount} ${plural(todoCount, 'thing', 'things')}` : 'All caught up'}</span>}>
+          {!n ? <p className="text-sm text-gray-500 animate-pulse">Loading your to-do list…</p>
+            : items.length === 0 ? <p className="text-sm text-gray-600">✅ You’re all caught up. Nothing needs doing right now.</p>
+            : (
+              <div className="space-y-2">
+                {items.map((i, k) => (
+                  <div key={k} className={`border rounded-2xl p-4 flex gap-3 items-start ${TONE[i.tone]}`}>
+                    <span className="text-2xl leading-none">{i.icon}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-gray-800">{i.title}</p>
+                      {i.sub && <p className="text-sm text-gray-600 mt-0.5 break-words">{i.sub}</p>}
+                      <button onClick={() => go(i.tab)} className={`sm:hidden mt-2 text-sm font-semibold px-3 py-1.5 rounded-xl ${BTN[i.tone]}`}>{i.action} →</button>
+                    </div>
+                    <button onClick={() => go(i.tab)} className={`hidden sm:block shrink-0 text-sm font-semibold px-3 py-2 rounded-xl ${BTN[i.tone]}`}>{i.action} →</button>
+                  </div>
+                ))}
               </div>
-              <button onClick={() => go(i.tab)} className={`hidden sm:block shrink-0 text-sm font-semibold px-3 py-1.5 rounded-lg ${BTN[i.tone]}`}>{i.action} →</button>
-            </div>
-          ))}
-        </div>
-      )}
+            )}
+        </Panel>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {[
-          ['📦', 'Batches with stock', batches.filter(live).length, 'stock'],
-          ['🐄', 'Animals on the farm', animals.reduce((x, b) => x + Number(b.quantityRemaining ?? b.quantity), 0), 'stock', 'animals'],
-          ['🧾', 'Open orders', n ? n.newOrders.length + n.partSent.length + n.meatElsewhere.length : '…', 'orders'],
-          ['🎖️', 'Badges unlocked', batches.reduce((x, b) => x + (b.unlocks || 0), 0), 'farm'],
-        ].map(([icon, label, value, t, f]) => (
-          <button key={label} onClick={() => go(t, f)} className="bg-white rounded-lg shadow p-4 text-left hover:shadow-md transition">
-            <p className="text-xs text-gray-500">{icon} {label}</p>
-            <p className="text-2xl font-bold text-gray-800">{value}</p>
-          </button>
-        ))}
+        <div className="xl:col-span-2 space-y-4">
+          <Panel title="🧺 Your stock" action={<button onClick={() => go('stock')} className="text-sm font-semibold text-green-700 hover:underline">All →</button>}>
+            {stockList.length === 0 ? (
+              <p className="text-sm text-gray-500">No produce in stock. <button onClick={onCreate} disabled={!approved} className="text-green-700 font-semibold hover:underline disabled:text-gray-400">Add a batch?</button></p>
+            ) : (
+              <div className="space-y-4">
+                {stockList.map(b => {
+                  const total = Number(b.quantity) || 0;
+                  const left = Number(b.quantityRemaining ?? b.quantity) || 0;
+                  const sold = total ? Math.round(((total - left) / total) * 100) : 0;
+                  return (
+                    <div key={b.batchId}>
+                      <div className="flex justify-between gap-2 text-sm"><span className="font-semibold truncate">{b.productName}</span><span className="text-gray-500 shrink-0">{formatQty(left, b.unit)} left</span></div>
+                      <div className="h-2 rounded-full bg-gray-100 overflow-hidden mt-1.5"><div className="h-full rounded-full" style={{ width: `${Math.max(3, sold)}%`, background: FP.green }} /></div>
+                      <p className="text-[11px] text-gray-500 mt-1">{sold}% sold · {b.useBy ? <span className={b.useSoon ? 'font-semibold text-red-600' : ''}>use by {shortDay(b.useBy)}</span> : 'no use-by'}{b.dealPrice != null ? ' · 🏷️ on deal' : ''}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Panel>
+          <div className="rounded-3xl p-4 flex items-center gap-3" style={{ background: FP.mint }}>
+            <span className="shrink-0"><Maru mode="sit" size={64} /></span>
+            <div className="min-w-0">
+              {star ? <><p className="font-bold text-sm">Your {star.productName.toLowerCase()} {star.unlocks === 1 ? 'has earned a badge' : `have earned ${star.unlocks} badges`} 🎉</p>
+                <p className="text-xs text-gray-600">Diners who ate it scanned their bill and collected your farm’s badge.</p></>
+                : <><p className="font-bold text-sm">Diners collect badges for your farm</p><p className="text-xs text-gray-600">When a café serves your produce, its bill has a QR code. Diners scan it to see your farm and collect your badge.</p></>}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

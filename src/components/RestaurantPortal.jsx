@@ -10,6 +10,8 @@ import { PhotoPicker, DeliveryPhotoButton } from './DeliveryPhoto';
 import { TermsCheck, Refs, OwedLine, AlertSettings, Checklist } from './FarmerSupply';
 import { printQrSlip } from './PrintDocs';
 import { TxLink, ChainHelp } from './ChainProof';
+import DashShell, { FP, PageTitle, StatTile, Panel, UseByBar, greeting, todayLabel } from './DashShell';
+import Maru from './Maru';
 
 // Prices are only shown to the farm and the restaurant — never on the customer journey
 const gbp = (v) => (v === null || v === undefined || isNaN(Number(v))) ? null : `£${Number(v).toFixed(2)}`;
@@ -20,7 +22,10 @@ const API_BASE = 'https://farm-passport-backend-v3.onrender.com/api';
 const formatQty = (amount, unit) =>
   `${Number(amount).toLocaleString('en-GB')} ${unit || ''}`.trim();
 
-function RestaurantPortal({ onBack, startOn = null }) {
+// v4.5: the café pages (an email link can open one of these)
+const CAFE_PAGES = ['today', 'create', 'order', 'deliveries', 'history', 'dishes', 'money', 'alerts'];
+
+function RestaurantPortal({ onBack, onHome, topNav = null, startOn = null }) {
   // ── Restaurant auth (self-contained, App.jsx doesn't know about this) ──
   const [restaurantUser,  setRestaurantUser]  = useState(null);
   const [restaurantToken, setRestaurantToken] = useState(null);
@@ -87,13 +92,18 @@ function RestaurantPortal({ onBack, startOn = null }) {
   // NOT LOGGED IN → restaurant login / register
   // ──────────────────────────────────────────────
   if (!restaurantUser) {
+    // v4.5: signed out → the normal page frame (top bar), with a welcoming header
     return (
-      <div className="max-w-4xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="bg-white rounded-lg shadow-lg p-8 text-center">
-          <div className="text-6xl mb-3">🍽️</div>
-          <h2 className="text-3xl font-bold text-gray-800 mb-1">Restaurant Portal</h2>
-          <p className="text-gray-600">Sign in to generate receipt QR codes for your customers</p>
+      <div className={topNav ? 'fp-app min-h-screen bg-gray-50 px-3 sm:px-4 pt-3 pb-24' : ''}>
+      {topNav}
+      <div className="fp-page max-w-4xl mx-auto space-y-6">
+        <div className="relative overflow-hidden bg-white rounded-3xl border border-black/5 p-8 text-center">
+          <div className="fp-glow" aria-hidden="true" />
+          <div className="relative">
+            <div className="text-5xl mb-3">🍽️</div>
+            <h2 className="fp-gradient text-3xl sm:text-4xl font-extrabold tracking-tight mb-1">Café & restaurant</h2>
+            <p className="text-gray-600">Order from local farms, confirm deliveries, and print a QR code on every bill.</p>
+          </div>
         </div>
 
         {authView === 'login' ? (
@@ -112,6 +122,7 @@ function RestaurantPortal({ onBack, startOn = null }) {
           <button onClick={onBack} className="text-gray-600 hover:underline">← Back</button>
         </div>
       </div>
+      </div>
     );
   }
 
@@ -124,6 +135,7 @@ function RestaurantPortal({ onBack, startOn = null }) {
       restaurantToken={restaurantToken}
       onLogout={handleRestaurantLogout}
       onBack={onBack}
+      onHome={onHome || onBack}
     />
   );
 }
@@ -131,16 +143,16 @@ function RestaurantPortal({ onBack, startOn = null }) {
 // ─────────────────────────────────────────────────────────
 // Logged-in restaurant: receipts, ordering stock, deliveries, history.
 // ─────────────────────────────────────────────────────────
-function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBack }) {
+function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBack, onHome }) {
   // ── Which tab is showing ──
   // v4.4b: an alert email can ask for a tab (/cafe?go=deliveries) — used once, then forgotten
   const [tab, setTab] = useState(() => {
     try {
       const t = sessionStorage.getItem('fp_cafe_tab');
       sessionStorage.removeItem('fp_cafe_tab');
-      return ['create', 'order', 'deliveries', 'history'].includes(t) ? t : 'create';
-    } catch { return 'create'; }
-  });   // 'create' | 'order' | 'deliveries' | 'history'
+      return CAFE_PAGES.includes(t) ? t : 'today';
+    } catch { return 'today'; }
+  });   // v4.5: 'today' | 'create' | 'order' | 'deliveries' | 'history' | 'dishes' | 'money' | 'alerts'
   const [showAlerts, setShowAlerts] = useState(false);   // v4.4: email alert settings
 
   // ── Email verification + approval (checked live from the backend) ──
@@ -301,30 +313,6 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
     fetchStock(); fetchDishes();
   };
 
-  // ── Logged-in header (shared by all states below) ──
-  const Header = () => (
-    <div className="bg-white rounded-lg shadow-lg p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-gray-800">🍽️ {restaurantUser.restaurantName}</h2>
-          <p className="text-sm text-gray-500">{restaurantUser.email}</p>
-        </div>
-        <div className="flex gap-2">
-          {approved && (
-            <button onClick={() => setShowAlerts(!showAlerts)} aria-expanded={showAlerts}
-              className="text-sm text-gray-600 hover:text-gray-800 font-semibold border border-gray-300 px-3 py-1.5 rounded-lg hover:bg-gray-50 transition">🔔 Alerts</button>
-          )}
-          <button
-            onClick={onLogout}
-            className="text-sm text-gray-500 hover:text-gray-700 font-semibold border border-gray-300 px-3 py-1.5 rounded-lg hover:bg-gray-50 transition"
-          >
-            Logout
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-
   // ── Banners: email not verified / waiting for approval ──
   const VerifyBanner = () => (
     <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-5">
@@ -368,172 +356,247 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
     </>
   );
 
-  // ── Tabs ──
-  const Tabs = () => (
-    <div className="bg-white rounded-lg shadow-lg p-2 grid grid-cols-2 sm:grid-cols-4 gap-2">
-      {[
-        { key: 'create',     label: '🧾 New Receipt' },
-        { key: 'order',      label: '🛒 Order Stock' },
-        { key: 'deliveries', label: '🚚 Deliveries' },
-        { key: 'history',    label: '📚 Past Receipts' },
-      ].map(t => (
-        <button
-          key={t.key}
-          onClick={() => { setTab(t.key); if (t.key === 'create') { fetchStock(); fetchDishes(); } }}
-          className={`py-2.5 rounded-lg font-semibold transition text-sm ${
-            tab === t.key ? 'bg-orange-600 text-white' : 'text-gray-600 hover:bg-gray-100'
-          }`}
-        >
-          {t.label}
-        </button>
-      ))}
-    </div>
-  );
-
-  // Page frame. A plain function (not a component) so the forms inside don't lose focus while typing.
-  const shell = (children) => (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <Header />
-      {showAlerts && <AlertSettings token={restaurantToken} />}
-      <Banners />
-      <CafeChecklist authHeader={authHeader} emailVerified={emailVerified} approved={approved} restaurantUser={restaurantUser} go={(t) => { setTab(t); if (t === 'create') { fetchStock(); fetchDishes(); } }} />
-      <Tabs />
-      {children}
-      <div className="text-center">
-        <button onClick={onBack} className="text-gray-600 hover:underline">← Back</button>
+  // ── v4.5: the page frame — sidebar on a computer, bottom bar on a phone ──
+  const [arriving, setArriving] = useState(0);
+  const countArriving = () => axios.get(`${API_BASE}/restaurant/inbound`, authHeader)
+    .then(r => setArriving((r.data.shipments || []).filter(x => x.status === 'in_transit').length)).catch(() => {});
+  useEffect(() => { countArriving(); }, [tab]);
+  const go = (t) => { setTab(t); if (t === 'create') { fetchStock(); fetchDishes(); } window.scrollTo({ top: 0 }); };
+  const nav = [
+    { key: 'today',      icon: '☀️', label: 'Today' },
+    { key: 'create',     icon: '🧾', label: 'New bill' },
+    { key: 'order',      icon: '🛒', label: 'Order stock' },
+    { key: 'deliveries', icon: '🚚', label: 'Deliveries', badge: arriving || null },
+    { key: 'history',    icon: '📚', label: 'Receipts' },
+    { key: 'dishes',     icon: '🍲', label: 'Dishes' },
+    { key: 'money',      icon: '💷', label: 'Money' },
+  ];
+  const shell = (children, activeTab = tab) => (
+    <DashShell
+      who={{ name: restaurantUser.restaurantName, sub: approved ? 'Café · approved' : approvalStatus === 'rejected' ? 'Café · not approved' : 'Café · waiting for approval', status: approved ? 'ok' : approvalStatus === 'rejected' ? 'stop' : 'wait' }}
+      nav={nav} phone={['today', 'order', 'create', 'deliveries']} active={activeTab} onNav={(k) => { if (createdReceipt) handleCreateAnother(); go(k); }}
+      extras={[{ key: 'alerts', icon: '🔔', label: 'Email alerts', active: tab === 'alerts', onClick: () => go('alerts') }]}
+      onHome={onHome} onLogout={onLogout}
+      tips={[
+        'Tap a dish tile once for each serving, then print the bill. Diners scan it to meet the farm.',
+        'If everything in a delivery is there, one tap on “All arrived” does it.',
+        'Order from several products at once: put amounts on each, then place them together.',
+        'Set “needs to last until” when ordering, and only stock that lasts that long is offered.',
+        'Your dishes’ recipes take the right amounts off your stock on every bill.',
+      ]}>
+      <div className="fp-page space-y-6">
+        <Banners />
+        {children}
       </div>
-    </div>
+    </DashShell>
   );
 
   // ─── SUCCESS — QR code ───
   if (createdReceipt) {
     const r = createdReceipt;
-    return (
-      <div className="max-w-4xl mx-auto space-y-6">
-        <Header />
-
-        <div className="bg-white rounded-lg shadow-lg p-8 text-center">
-          <div className="text-6xl mb-3">✅</div>
-          <h2 className="text-3xl font-bold text-green-700 mb-1">Receipt Created!</h2>
-          <p className="text-gray-600">Print this QR code on the customer's bill</p>
-        </div>
-
-        <div className="bg-white rounded-lg shadow-lg p-8">
-          <div className="flex flex-col items-center">
-            <QRCodeSVG value={receiptLink(r.receiptId)} size={260} includeMargin={true} bgColor="#ffffff" fgColor="#1f2937" />
-            <p className="font-mono text-sm text-gray-600 mt-4 break-all">{r.receiptId}</p>
+    return shell(
+      <>
+        <PageTitle kicker={r.billName ? `🪑 ${r.billName}` : 'New bill'} title="Bill ready ✅"
+          actions={[
+            <button key="a" onClick={handleCreateAnother} className="px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-green-600 hover:bg-green-700 shadow-md">+ New bill</button>,
+          ]} />
+        <div className="grid lg:grid-cols-5 gap-5 items-start">
+          <Panel className="lg:col-span-3 text-center">
+            <p className="text-gray-600 mb-4">Print this QR code on the customer's bill, or let them scan the screen.</p>
+            <div className="inline-block bg-white rounded-3xl border border-black/5 p-3 shadow-sm">
+              <QRCodeSVG value={receiptLink(r.receiptId)} size={240} includeMargin={true} bgColor="#ffffff" fgColor="#13261A" />
+            </div>
+            <p className="font-mono text-xs text-gray-500 mt-3 break-all">{r.receiptId}</p>
+            <div className="mt-4 flex flex-wrap gap-2 justify-center">
+              <button onClick={() => printQrSlip({ title: `${restaurantUser.restaurantName}${r.billName ? ` · ${r.billName}` : ''}`, subtitle: 'Scan to see where your meal came from and collect a farm badge', url: receiptLink(r.receiptId) })}
+                className="bg-gray-800 text-white text-sm font-semibold px-4 py-2.5 rounded-xl hover:bg-gray-900">🖨️ Print the QR slip</button>
+            </div>
             <NfcShare url={receiptLink(r.receiptId)} />
-          </div>
+          </Panel>
+          <Panel className="lg:col-span-2" title={<>🧾 The bill{r.billName ? <span className="font-semibold text-gray-500"> · {r.billName}</span> : null}</>}>
+            <div className="divide-y divide-black/5">
+              {(r.lines || []).map((l, i) => (
+                <div key={i} className="py-2 flex justify-between text-sm">
+                  <span>{l.servings !== 1 ? `${l.servings} × ` : ''}{l.name}</span>
+                  <span className="font-semibold">{l.lineTotal !== null && l.lineTotal !== undefined ? gbp(l.lineTotal) : ''}</span>
+                </div>
+              ))}
+            </div>
+            {r.discount && <p className="text-sm text-gray-600 mt-2 flex justify-between"><span>Discount ({r.discount.type === 'percent' ? `${r.discount.value}%` : gbp(r.discount.value)})</span><span>−{gbp(r.discount.amount)}</span></p>}
+            {r.total !== null && r.total !== undefined && <p className="mt-3 flex justify-between items-end"><span className="font-semibold text-gray-600">Total</span><span className="text-3xl font-extrabold">{gbp(r.total)}</span></p>}
+            {r.farms?.length > 0 && (
+              <div className="rounded-2xl p-3 mt-4 text-xs text-green-800 flex gap-2" style={{ background: FP.mint }}>🌱
+                <span>{r.farms.length > 1 ? `${r.farms.length} farms on this bill. The customer can collect ${r.farms.length} badges.` : 'The customer can collect a farm badge from this bill.'}</span></div>
+            )}
+            <div className="mt-4 text-xs text-gray-600">
+              <p className="font-semibold text-gray-700 mb-1">Taken off your stock (recorded on the blockchain):</p>
+              {(r.used || []).map(u => <p key={u.shipmentId}>{formatQty(u.quantity, u.unit)} {u.productName} — {u.farmName || 'farm'} · delivery #{u.shipmentId}</p>)}
+            </div>
+          </Panel>
         </div>
-
-        <div className="bg-green-50 border-2 border-green-200 rounded-lg p-6">
-          <h3 className="text-lg font-bold text-gray-800 mb-3">📋 The bill{r.billName ? <span className="font-semibold text-gray-600"> · {r.billName}</span> : null}</h3>
-          <div className="divide-y divide-green-100">
-            {(r.lines || []).map((l, i) => (
-              <div key={i} className="py-1.5 flex justify-between text-sm">
-                <span>{l.servings !== 1 ? `${l.servings} × ` : ''}{l.name}</span>
-                <span className="font-semibold">{l.lineTotal !== null && l.lineTotal !== undefined ? gbp(l.lineTotal) : ''}</span>
-              </div>
-            ))}
-          </div>
-          {r.discount && <p className="text-sm text-gray-600 mt-2 flex justify-between"><span>Discount ({r.discount.type === 'percent' ? `${r.discount.value}%` : gbp(r.discount.value)})</span><span>−{gbp(r.discount.amount)}</span></p>}
-          {r.total !== null && r.total !== undefined && <p className="text-lg font-bold text-gray-800 mt-2 flex justify-between"><span>Total</span><span>{gbp(r.total)}</span></p>}
-          <div className="mt-4 text-xs text-gray-600">
-            <p className="font-semibold text-gray-700 mb-1">Taken off your stock (recorded on the blockchain):</p>
-            {(r.used || []).map(u => <p key={u.shipmentId}>{formatQty(u.quantity, u.unit)} {u.productName} — {u.farmName || 'farm'} · delivery #{u.shipmentId}</p>)}
-          </div>
-          {r.farms?.length > 1 && <p className="text-xs text-green-800 mt-2">🎖️ The customer can collect {r.farms.length} farm badges from this one receipt.</p>}
-        </div>
-
-        <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-4 text-center space-y-2">
-          <button onClick={() => printQrSlip({ title: `${restaurantUser.restaurantName}${r.billName ? ` · ${r.billName}` : ''}`, subtitle: 'Scan to see where your meal came from and collect a farm badge', url: receiptLink(r.receiptId) })}
-            className="bg-gray-800 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-gray-900">🖨️ Print the QR slip</button>
-          <p className="text-yellow-800 text-xs">Hand it over with the bill, or show this screen for the customer to scan.</p>
-        </div>
-
-        <div className="flex gap-3 justify-center">
-          <button onClick={handleCreateAnother} className="bg-green-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-green-700 transition">
-            + Create Another Receipt
-          </button>
-          <button onClick={onBack} className="bg-gray-100 text-gray-700 px-6 py-3 rounded-lg font-bold hover:bg-gray-200 transition">
-            ← Back
-          </button>
-        </div>
-      </div>
+      </>, 'create'
     );
   }
 
+  if (tab === 'today') {
+    return shell(
+      <>
+        <CafeChecklist authHeader={authHeader} emailVerified={emailVerified} approved={approved} restaurantUser={restaurantUser} go={go} />
+        <CafeToday authHeader={authHeader} approved={approved} restaurantUser={restaurantUser} go={go} onReceived={() => { fetchStock(); countArriving(); }} />
+      </>
+    );
+  }
   if (tab === 'history') {
-    return shell(<ReceiptHistory restaurantToken={restaurantToken} onLogout={onLogout} />);
+    return shell(<><PageTitle kicker="Every bill you've printed" title="Receipts" /><ReceiptHistory restaurantToken={restaurantToken} onLogout={onLogout} /></>);
   }
   if (tab === 'order') {
-    return shell(<OrderStock authHeader={authHeader} approved={approved} />);
+    return shell(<><PageTitle kicker="Straight from local farms" title="Order stock" /><OrderStock authHeader={authHeader} approved={approved} /></>);
   }
   if (tab === 'deliveries') {
-    return shell(<><Deliveries authHeader={authHeader} approved={approved} onReceived={fetchStock} /><ChainHelp who="cafe" className="mt-6" /></>);
+    return shell(<><PageTitle kicker="Confirm what arrived" title="Deliveries" /><Deliveries authHeader={authHeader} approved={approved} onReceived={() => { fetchStock(); countArriving(); }} /><ChainHelp who="cafe" className="mt-6" /></>);
+  }
+  if (tab === 'dishes') {
+    return shell(
+      <>
+        <PageTitle kicker="Menu price + what goes into one serving" title="Your dishes" actions={[<button key="b" onClick={() => go('create')} className="px-4 py-2.5 rounded-xl text-sm font-semibold bg-white border border-black/10 hover:bg-gray-100">🧾 New bill</button>]} />
+        <Panel><DishManager dishes={dishes} authHeader={authHeader} onChanged={fetchDishes} /></Panel>
+      </>
+    );
+  }
+  if (tab === 'money') {
+    return shell(<><PageTitle kicker="Paying the farms you buy from" title="Money" /><CafeMoney authHeader={authHeader} /></>);
+  }
+  if (tab === 'alerts') {
+    return shell(
+      <>
+        <PageTitle kicker={restaurantUser.email} title="Email alerts" />
+        <AlertSettings token={restaurantToken} />
+        <ChainHelp who="cafe" />
+      </>
+    );
   }
 
-  // ─── NEW RECEIPT: build the bill ───
+  // ─── NEW BILL ───
   const usable = dishes.filter(d => d.ingredients?.length);
+  const billPanel = (
+    <Panel className="xl:sticky xl:top-6">
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <h2 className="text-lg font-bold">🧾 Bill</h2>
+        <input value={billName} maxLength={40} onChange={(e) => setBillName(e.target.value)}
+          placeholder="🪑 Table or name" aria-label="Name on the bill (optional)"
+          className="w-40 px-3 py-1.5 border border-gray-200 rounded-xl text-sm text-right" />
+      </div>
+      {allLines.length === 0 ? (
+        <p className="text-sm text-gray-500 py-6 text-center">Tap the dishes they had.</p>
+      ) : allLines.map(l => (
+        <div key={l.key} className="flex justify-between gap-2 py-2 border-b border-black/5 text-sm">
+          <span>
+            {l.servings !== 1 ? `${l.servings} × ` : ''}{l.name}
+            {l.key.startsWith('x') && <button type="button" onClick={() => setExtras(extras.filter(x => x.key !== l.key))} className="text-xs text-red-500 ml-2" aria-label="Remove">✕</button>}
+          </span>
+          <span className="font-semibold">{l.total !== null ? gbp(l.total) : '—'}</span>
+        </div>
+      ))}
+      {allLines.length > 0 && (
+        <>
+          <div className="flex gap-2 items-center py-2 text-sm flex-wrap">
+            <span className="text-gray-600 flex-1">Discount</span>
+            <select value={discType} onChange={(e) => setDiscType(e.target.value)} className="px-2 py-1 border border-gray-200 rounded-lg bg-white">
+              <option value="amount">£</option>
+              <option value="percent">%</option>
+            </select>
+            <input type="number" step="0.01" min="0" value={discValue} onChange={(e) => setDiscValue(e.target.value)} placeholder="0"
+              className="w-20 px-2 py-1 border border-gray-200 rounded-lg" />
+            {discount > 0 && <span className="text-gray-500 w-full text-right">−{gbp(discount)}</span>}
+          </div>
+          <div className="flex justify-between items-end mt-2 mb-1">
+            <span className="font-semibold text-gray-600">Total</span>
+            {ownTotal === null ? (
+              <span className="text-right"><span className="text-3xl font-extrabold">{total !== null ? gbp(total) : <span className="text-sm font-normal text-gray-400">no prices — type one</span>}</span>
+                <button type="button" onClick={() => setOwnTotal(total !== null ? String(total) : '')} className="block text-xs text-blue-600 font-normal ml-auto hover:underline">change</button>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1">£
+                <input type="number" step="0.01" min="0" value={ownTotal} onChange={(e) => setOwnTotal(e.target.value)} className="w-24 px-2 py-1 border border-gray-200 rounded-lg" />
+                <button type="button" onClick={() => setOwnTotal(null)} className="text-xs text-gray-500 hover:underline">auto</button>
+              </span>
+            )}
+          </div>
+        </>
+      )}
+      {submitErr && <p className="text-red-600 text-sm font-semibold bg-red-50 border border-red-200 rounded-xl p-3 mt-3">⚠️ {submitErr}</p>}
+      <button type="submit" form="fp-bill"
+        disabled={submitting || emailVerified === false || !approved || !allLines.length}
+        className="w-full mt-4 bg-green-600 text-white py-3.5 rounded-2xl font-bold text-base hover:bg-green-700 shadow-md disabled:bg-gray-300 disabled:shadow-none disabled:cursor-not-allowed">
+        {submitting               ? '⏳ Creating receipt…'
+         : emailVerified === false ? '🔒 Verify your email to create receipts'
+         : !approved               ? '🔒 Waiting for approval'
+         :                           `🧾 Print bill with QR${total !== null && allLines.length ? ` · ${gbp(total)}` : ''}`}
+      </button>
+      <p className="text-[11px] text-gray-400 mt-2">Ingredients come off your deliveries, soonest use-by first, in one blockchain transaction. Receipts can never add up to more than you received.</p>
+    </Panel>
+  );
   return shell(
     <>
-      <div className="bg-white rounded-lg shadow-lg p-8">
-        {loading ? (
-          <p className="text-gray-600 text-center">⏳ Loading your stock…</p>
-        ) : fetchErr ? (
-          <p className="text-red-600 text-center">⚠️ {fetchErr}</p>
-        ) : stock.length === 0 ? (
-          <div className="text-center">
-            <div className="text-5xl mb-3">📦</div>
-            <p className="text-gray-700 font-semibold">No stock yet</p>
-            <p className="text-gray-500 text-sm mt-1">
-              Order from a farm in <strong>🛒 Order Stock</strong>, then confirm it arrived in <strong>🚚 Deliveries</strong>.
-              Receipts are created from stock you've received.
-            </p>
+      <PageTitle kicker={todayLabel()} title="New bill"
+        actions={[<button key="d" onClick={() => go('dishes')} className="px-4 py-2.5 rounded-xl text-sm font-semibold bg-white border border-black/10 hover:bg-gray-100">🍲 Your dishes ({dishes.length})</button>]} />
+      {loading ? (
+        <Panel><p className="text-gray-600 text-center">⏳ Loading your stock…</p></Panel>
+      ) : fetchErr ? (
+        <Panel><p className="text-red-600 text-center">⚠️ {fetchErr}</p></Panel>
+      ) : stock.length === 0 ? (
+        <Panel>
+          <div className="text-center py-4">
+            <div className="flex justify-center mb-2"><Maru mode="sit" size={90} say="Bills come from stock you've received!" /></div>
+            <p className="text-gray-800 font-bold text-lg">No stock yet</p>
+            <p className="text-gray-500 text-sm mt-1 max-w-md mx-auto">Order from a farm in <strong>🛒 Order stock</strong>, then confirm it arrived in <strong>🚚 Deliveries</strong>. Bills are made from stock you've received.</p>
+            <button onClick={() => go('order')} className="mt-4 px-5 py-2.5 rounded-xl text-sm font-semibold text-white bg-green-600 hover:bg-green-700">🛒 Order stock</button>
           </div>
-        ) : (
-          <form onSubmit={handleCreate} className="space-y-6">
-            {/* Dishes */}
-            <div>
-              <div className="flex justify-between items-baseline mb-2">
-                <label className="block text-sm font-semibold text-gray-700">What did they have?</label>
-                <button type="button" onClick={() => setShowDishes(true)} className="text-xs text-orange-600 font-semibold hover:underline">+ new dish</button>
+        </Panel>
+      ) : (
+        <form id="fp-bill" onSubmit={handleCreate} className="grid xl:grid-cols-3 gap-5 items-start">
+          <div className="xl:col-span-2 space-y-4">
+            {usable.length === 0 ? (
+              <Panel>
+                <p className="text-sm text-gray-600">No dishes yet. Save your dishes (menu price and recipe) so one tap adds them, or use “Something else” below.</p>
+                <button type="button" onClick={() => go('dishes')} className="mt-3 px-4 py-2 rounded-xl text-sm font-semibold text-white bg-green-600 hover:bg-green-700">+ Add a dish</button>
+              </Panel>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {usable.map(d => {
+                  const n = counts[d.id] || 0;
+                  const out = d.canMake !== null && d.canMake !== undefined && n >= d.canMake;
+                  const none = d.canMake === 0;
+                  return (
+                    <div key={d.id} className={`relative rounded-3xl border p-4 transition ${n ? 'border-green-600 bg-green-50 shadow-sm' : 'border-black/5 bg-white'} ${none ? 'opacity-50' : ''}`}>
+                      <button type="button" onClick={() => !out && setCount(d.id, n + 1)} disabled={out}
+                        className="w-full text-left disabled:cursor-not-allowed" aria-label={`Add ${d.name}`}>
+                        <div className="text-4xl mb-2" aria-hidden="true">{dishEmoji(d)}</div>
+                        <p className="font-bold leading-tight pr-8">{d.name}</p>
+                        <p className="text-sm text-gray-500">{d.price !== null ? gbp(d.price) : 'no price'} · {none ? <span className="text-red-600 font-semibold">out of stock</span> : `${d.canMake} left`}</p>
+                      </button>
+                      {n > 0 && (
+                        <div className="absolute top-3 right-3 flex items-center gap-1">
+                          <button type="button" onClick={() => setCount(d.id, n - 1)} aria-label={`One less ${d.name}`}
+                            className="w-7 h-7 rounded-full bg-white border border-black/10 text-gray-700 font-bold leading-none">−</button>
+                          <span className="w-7 h-7 rounded-full text-white text-sm font-bold flex items-center justify-center" style={{ background: FP.green }}>{n}</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-              {usable.length === 0 ? (
-                <p className="text-sm text-gray-500 bg-gray-50 rounded-lg p-3">No dishes yet. Add your dishes (with price and recipe) below, or use "Something else".</p>
-              ) : (
-                <div className="grid sm:grid-cols-2 gap-2">
-                  {usable.map(d => {
-                    const n = counts[d.id] || 0;
-                    const out = d.canMake !== null && d.canMake !== undefined && n >= d.canMake;
-                    return (
-                      <div key={d.id} className={`border rounded-lg p-3 flex justify-between items-center gap-2 ${n ? 'border-orange-400 bg-orange-50' : 'border-gray-200'}`}>
-                        <div className="min-w-0">
-                          <p className="font-semibold text-gray-800 truncate">{d.name}</p>
-                          <p className="text-xs text-gray-500">{d.price !== null ? gbp(d.price) : 'no price'} · {d.canMake === 0 ? <span className="text-red-600">out of stock</span> : `${d.canMake} left`}</p>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button type="button" onClick={() => setCount(d.id, n - 1)} disabled={!n}
-                            className="w-8 h-8 rounded-lg bg-gray-100 font-bold text-gray-700 hover:bg-gray-200 disabled:opacity-40">−</button>
-                          <span className="w-6 text-center font-semibold">{n}</span>
-                          <button type="button" onClick={() => setCount(d.id, n + 1)} disabled={out}
-                            className="w-8 h-8 rounded-lg bg-orange-600 font-bold text-white hover:bg-orange-700 disabled:bg-gray-300">+</button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+            )}
 
             {/* Something else: an amount of a product, typed in */}
-            <div>
-              {!extra ? (
-                <button type="button" onClick={() => setExtra({ product: '', quantity: '', name: '', price: '' })} className="text-sm text-orange-600 font-semibold hover:underline">
-                  ✏️ Something else (type an amount)
-                </button>
-              ) : (
-                <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2">
+            {!extra ? (
+              <button type="button" onClick={() => setExtra({ product: '', quantity: '', name: '', price: '' })}
+                className="w-full rounded-3xl border-2 border-dashed border-gray-300 p-4 text-sm font-semibold text-gray-600 hover:border-green-600 hover:text-green-700">
+                ✏️ Something else (type an amount from your stock)
+              </button>
+            ) : (
+              <Panel title="✏️ Something else">
+                <div className="space-y-2">
                   <select value={extra.product} onChange={(e) => setExtra({ ...extra, product: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm">
                     <option value="">— Product from your stock —</option>
@@ -549,98 +612,31 @@ function RestaurantReceiptForm({ restaurantUser, restaurantToken, onLogout, onBa
                       placeholder="£ price" className="w-24 px-3 py-2 border border-gray-300 rounded-lg text-sm" />
                   </div>
                   <div className="flex gap-2">
-                    <button type="button" onClick={addExtra} className="text-sm bg-gray-800 text-white px-3 py-1.5 rounded-lg">Add to bill</button>
+                    <button type="button" onClick={addExtra} className="text-sm bg-gray-800 text-white px-4 py-2 rounded-xl font-semibold">Add to bill</button>
                     <button type="button" onClick={() => setExtra(null)} className="text-sm text-gray-600 hover:underline">Cancel</button>
                   </div>
                 </div>
-              )}
-            </div>
-
-            {/* The bill */}
-            {allLines.length > 0 && (
-              <div className="border-2 border-orange-200 rounded-lg p-4">
-                <div className="flex items-center gap-2 mb-2 flex-wrap">
-                  <p className="text-sm font-semibold text-gray-700">🧾 Bill</p>
-                  <input value={billName} maxLength={40} onChange={(e) => setBillName(e.target.value)}
-                    placeholder="Table, name or group (optional)" aria-label="Name on the bill"
-                    className="flex-1 min-w-[10rem] px-2 py-1 border border-gray-300 rounded text-sm" />
-                </div>
-                {allLines.map(l => (
-                  <div key={l.key} className="flex justify-between text-sm py-0.5">
-                    <span>
-                      {l.servings !== 1 ? `${l.servings} × ` : ''}{l.name}
-                      {l.key.startsWith('x') && <button type="button" onClick={() => setExtras(extras.filter(x => x.key !== l.key))} className="text-xs text-red-500 ml-2">✕</button>}
-                    </span>
-                    <span>{l.total !== null ? gbp(l.total) : '—'}</span>
-                  </div>
-                ))}
-                <div className="flex gap-2 items-center mt-3 text-sm flex-wrap">
-                  <span className="text-gray-600">Discount</span>
-                  <select value={discType} onChange={(e) => setDiscType(e.target.value)} className="px-2 py-1 border border-gray-300 rounded bg-white">
-                    <option value="amount">£</option>
-                    <option value="percent">%</option>
-                  </select>
-                  <input type="number" step="0.01" min="0" value={discValue} onChange={(e) => setDiscValue(e.target.value)} placeholder="0"
-                    className="w-20 px-2 py-1 border border-gray-300 rounded" />
-                  {discount > 0 && <span className="text-gray-500">−{gbp(discount)}</span>}
-                </div>
-                <div className="flex justify-between items-center mt-3 border-t pt-2">
-                  <span className="font-bold text-gray-800">Total</span>
-                  {ownTotal === null ? (
-                    <span className="font-bold text-lg">{total !== null ? gbp(total) : <span className="text-sm font-normal text-gray-400">no prices — type one</span>}
-                      <button type="button" onClick={() => setOwnTotal(total !== null ? String(total) : '')} className="text-xs text-blue-600 font-normal ml-2 hover:underline">change</button>
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-1">£
-                      <input type="number" step="0.01" min="0" value={ownTotal} onChange={(e) => setOwnTotal(e.target.value)} className="w-24 px-2 py-1 border border-gray-300 rounded" />
-                      <button type="button" onClick={() => setOwnTotal(null)} className="text-xs text-gray-500 hover:underline">auto</button>
-                    </span>
-                  )}
-                </div>
-              </div>
+              </Panel>
             )}
-
-            {submitErr && (
-              <div className="bg-red-50 border border-red-300 rounded-lg p-3">
-                <p className="text-red-600 text-sm font-semibold">⚠️ {submitErr}</p>
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={submitting || emailVerified === false || !approved || !allLines.length}
-              className="w-full bg-orange-600 text-white py-3 rounded-lg font-bold text-lg hover:bg-orange-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed"
-            >
-              {submitting               ? '⏳ Creating receipt…'
-               : emailVerified === false ? '🔒 Verify your email to create receipts'
-               : !approved               ? '🔒 Waiting for approval'
-               :                           '🧾 Generate Receipt QR'}
-            </button>
-            <p className="text-xs text-gray-400 -mt-3">
-              Ingredients come off your deliveries, soonest use-by first, in one blockchain transaction — receipts can never add up to more than you received.
-            </p>
-          </form>
-        )}
-      </div>
-
-      <div className="bg-white rounded-lg shadow-lg p-6">
-        <button type="button" onClick={() => setShowDishes(!showDishes)}
-          className="w-full flex justify-between items-center text-left">
-          <span className="text-lg font-bold text-gray-800">🍲 Your dishes <span className="text-sm font-normal text-gray-500">({dishes.length})</span></span>
-          <span className="text-sm text-orange-600 font-semibold">{showDishes ? 'Hide' : 'Manage'}</span>
-        </button>
-        {showDishes && <DishManager dishes={dishes} authHeader={authHeader} onChanged={fetchDishes} />}
-      </div>
-
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-5">
-        <h3 className="text-sm font-bold text-blue-800 mb-2">💡 How this works</h3>
-        <p className="text-blue-700 text-sm">
-          Tap the dishes on the customer's bill. The total adds itself up (add a discount, or type a different total if you need to).
-          Print the QR code on their receipt — when they scan it, they see where their food came from and collect a badge for each farm.
-        </p>
-      </div>
+            <p className="text-xs text-gray-500 px-1">💡 Tap a dish once for each serving. Print the QR code on their bill: when they scan it, they see where their food came from and collect a badge for each farm.</p>
+          </div>
+          {billPanel}
+        </form>
+      )}
     </>
   );
+}
+
+// A friendly picture for a dish, from its name (or its main ingredient)
+function dishEmoji(d) {
+  const t = `${d.name} ${(d.ingredients || []).map(i => i.productName).join(' ')}`.toLowerCase();
+  const pick = [
+    [/soup|broth/, '🥣'], [/pie/, '🥧'], [/salad|leaves|greens/, '🥗'], [/burger/, '🍔'], [/steak|sirloin|ribeye|beef|brisket/, '🥩'],
+    [/lamb|chop/, '🍖'], [/pork|bacon|sausage|ham/, '🥓'], [/chicken/, '🍗'], [/breakfast|egg|omelette/, '🍳'], [/crumble|cake|tart|pudding/, '🍰'],
+    [/apple/, '🍎'], [/pizza/, '🍕'], [/pasta|spaghetti/, '🍝'], [/sandwich|toast|bread/, '🥪'], [/curry|stew/, '🍛'], [/fish|cod|salmon/, '🐟'],
+    [/bean/, '🫛'], [/carrot/, '🥕'], [/potato|chips|mash/, '🥔'], [/squash|pumpkin/, '🎃'], [/mushroom/, '🍄'], [/honey/, '🍯'], [/cheese/, '🧀'],
+  ].find(([re]) => re.test(t));
+  return pick ? pick[1] : '🍽️';
 }
 
 // ─────────────────────────────────────────────────────────
@@ -738,13 +734,7 @@ function OrderStock({ authHeader, approved }) {
     }
   };
   // What's owed to each farm (delivered, not marked paid)
-  const owedByFarm = Object.values(orders
-    .filter(o => ['dispatched', 'part_sent', 'closed_short'].includes(o.status) && o.paymentStatus !== 'paid' && (o.owed ?? o.total) > 0)
-    .reduce((m, o) => {
-      const f = m[o.farmerAddress] || (m[o.farmerAddress] = { farm: o.farmName, owed: 0, orders: 0, estimate: false });
-      f.owed = Math.round((f.owed + Number(o.owed ?? o.total)) * 100) / 100; f.orders++; if (!o.owedFinal) f.estimate = true;
-      return m;
-    }, {}));
+  const owedByFarm = owedByFarmOf(orders);
 
   const cancelOrder = async (o) => {
     try {
@@ -775,7 +765,7 @@ function OrderStock({ authHeader, approved }) {
       <div className="flex bg-white rounded-lg shadow p-1 gap-1">
         {[['produce', '🥕 Fruit, veg & more'], ['meat', '🥩 Meat']].map(([k, label]) => (
           <button key={k} onClick={() => setKind(k)}
-            className={`flex-1 py-2 rounded-md font-semibold text-sm ${kind === k ? 'bg-orange-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>{label}</button>
+            className={`flex-1 py-2 rounded-md font-semibold text-sm ${kind === k ? 'bg-green-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>{label}</button>
         ))}
       </div>
 
@@ -784,20 +774,7 @@ function OrderStock({ authHeader, approved }) {
       {/* v4.4c: fruit, veg & more ordered like meat — a farm, its products as cards, several at once */}
       {kind === 'produce' && <ProduceOrder products={products} deals={deals} authHeader={authHeader} approved={approved} onOrdered={load} />}
 
-      {owedByFarm.length > 0 && (
-        <div className="bg-white rounded-lg shadow-lg p-6">
-          <h3 className="text-lg font-bold text-gray-800 mb-1">💷 Owed to farms</h3>
-          <p className="text-xs text-gray-500 mb-3">Delivered orders the farm hasn't marked as paid yet. Pay the farm directly; they tick it off.</p>
-          <div className="divide-y divide-gray-100">
-            {owedByFarm.map(f => (
-              <div key={f.farm} className="py-2 flex justify-between gap-3 text-sm">
-                <span>{f.farm} <span className="text-gray-500">· {f.orders} order{f.orders === 1 ? '' : 's'}</span></span>
-                <span className="font-semibold text-gray-800">{gbp(f.owed)}{f.estimate && <span className="text-xs font-normal text-gray-500"> so far</span>}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* v4.5: "Owed to farms" now lives on the Money page (and the Today page) */}
       {message && <p className="text-sm text-green-700 font-semibold">✅ {message}</p>}
       {error && <p className="text-sm text-red-600 font-semibold">⚠️ {error}</p>}
 
@@ -817,7 +794,7 @@ function OrderStock({ authHeader, approved }) {
                     <div className="flex gap-2 items-center mt-1">
                       <input autoFocus value={poEdit.value} maxLength={40} onChange={(e) => setPoEdit({ ...poEdit, value: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && savePo()}
                         placeholder="Your PO number" className="px-2 py-1 border border-gray-300 rounded text-xs w-40" />
-                      <button onClick={savePo} className="text-xs font-semibold text-white bg-orange-600 px-2 py-1 rounded">Save</button>
+                      <button onClick={savePo} className="text-xs font-semibold text-white bg-green-600 px-2 py-1 rounded">Save</button>
                       <button onClick={() => setPoEdit(null)} className="text-xs text-gray-500 hover:underline">Don't change</button>
                     </div>
                   )}
@@ -851,7 +828,7 @@ function OrderStock({ authHeader, approved }) {
                   ))}
                   <TermsCheck order={o} token={(authHeader?.headers?.Authorization || '').replace('Bearer ', '')} />
                   {asking?.id === o.id && asking.kind === 'again' && (
-                    <div className="mt-2 bg-orange-50 border border-orange-200 rounded-lg p-3 space-y-2">
+                    <div className="mt-2 bg-green-50 border border-green-200 rounded-lg p-3 space-y-2">
                       <p className="text-sm font-semibold text-gray-800">🔁 Order {o.productName} from {o.farmName} again</p>
                       <div className="flex flex-wrap gap-2 items-center text-sm">
                         <input type="number" step="any" min="0.001" value={asking.quantity} onChange={(e) => setAsking({ ...asking, quantity: e.target.value })}
@@ -864,7 +841,7 @@ function OrderStock({ authHeader, approved }) {
                         placeholder="Note to the farm (optional), e.g. small ones please" className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm" />
                       <div className="flex gap-3 items-center">
                         <button onClick={() => orderAgain(o, asking)} disabled={!(Number(asking.quantity) > 0)}
-                          className="bg-orange-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-orange-700 disabled:bg-gray-400">Place order</button>
+                          className="bg-green-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700 disabled:bg-gray-400">Place order</button>
                         <button onClick={() => setAsking(null)} className="text-sm text-gray-500 hover:underline">Don't order</button>
                       </div>
                     </div>
@@ -898,7 +875,7 @@ function OrderStock({ authHeader, approved }) {
                     <button onClick={() => setAsking({ id: o.id, kind: 'cancel' })} className="block text-xs text-red-600 hover:underline ml-auto">Cancel order</button>
                   ))}
                   {!['requested', 'part_sent'].includes(o.status) && !o.isDeal && approved && !(asking?.id === o.id && asking.kind === 'again') && (
-                    <button onClick={() => setAsking({ id: o.id, kind: 'again', quantity: String(o.quantity), po: o.poNumber || '', note: '' })} className="block text-xs font-semibold text-orange-700 hover:underline ml-auto">🔁 Order again</button>
+                    <button onClick={() => setAsking({ id: o.id, kind: 'again', quantity: String(o.quantity), po: o.poNumber || '', note: '' })} className="block text-xs font-semibold text-green-700 hover:underline ml-auto">🔁 Order again</button>
                   )}
                 </div>}
               </div>
@@ -911,6 +888,190 @@ function OrderStock({ authHeader, approved }) {
 }
 
 // v4.4 — getting started for a new café: verified → approved → first order → first delivery → a dish → a receipt
+// What the café owes each farm (delivered orders the farm hasn't marked paid)
+function owedByFarmOf(orders) {
+  return Object.values((orders || [])
+    .filter(o => ['dispatched', 'part_sent', 'closed_short'].includes(o.status) && o.paymentStatus !== 'paid' && (o.owed ?? o.total) > 0)
+    .reduce((m, o) => {
+      const f = m[o.farmerAddress] || (m[o.farmerAddress] = { farm: o.farmName, owed: 0, orders: 0, estimate: false });
+      f.owed = Math.round((f.owed + Number(o.owed ?? o.total)) * 100) / 100; f.orders++; if (!o.owedFinal) f.estimate = true;
+      return m;
+    }, {}));
+}
+
+// ─────────────────────────────────────────────────────────
+// v4.5 — Today: the café's day at a glance. Bills today, what's arriving (one tap to confirm),
+// what to use first, what's owed to farms, and the badges diners collected this week.
+// ─────────────────────────────────────────────────────────
+function CafeToday({ authHeader, approved, restaurantUser, go, onReceived }) {
+  const [d, setD] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [err, setErr] = useState(null);
+  const load = async () => {
+    const get = (p) => axios.get(`${API_BASE}${p}`, authHeader).then(r => r.data).catch(() => ({}));
+    const [rc, inb, st, od] = await Promise.all([get('/restaurant/my-receipts'), get('/restaurant/inbound'), get('/restaurant/my-stock'), get('/restaurant/orders')]);
+    setD({ receipts: rc.receipts || [], inbound: inb.shipments || [], stock: st.stock || [], orders: od.orders || [] });
+  };
+  useEffect(() => { load(); }, []);
+
+  // One tap: everything arrived as sent (the same as "All arrived" in Deliveries)
+  const allArrived = async (s) => {
+    setBusy(s.shipmentId); setErr(null);
+    try {
+      const form = new FormData();
+      form.append('quantityReceived', String(s.quantitySent));
+      form.append('quantityRejected', '0');
+      form.append('acceptTerms', 'true');
+      form.append('notes', '');
+      await axios.post(`${API_BASE}/restaurant/shipments/${s.shipmentId}/receive`, form, authHeader);
+      await load(); onReceived?.();
+    } catch (e) { setErr(e.response?.data?.error || 'Could not confirm the delivery'); }
+    finally { setBusy(null); }
+  };
+
+  if (!d) return <Panel><p className="text-gray-500">⏳ Getting your day ready…</p></Panel>;
+  const dayKey = (x) => new Date(x).toDateString();
+  const today = new Date().toDateString();
+  const weekAgo = new Date(Date.now() - 7 * 864e5).toDateString();
+  const billsToday = d.receipts.filter(r => r.createdAt && dayKey(r.createdAt) === today);
+  const takeOf = (r) => Number(r.amountPaid ?? r.total ?? 0) || 0;
+  const takings = Math.round(billsToday.reduce((n, r) => n + takeOf(r), 0) * 100) / 100;
+  const lastWeek = d.receipts.filter(r => r.createdAt && dayKey(r.createdAt) === weekAgo);
+  const lastTakings = lastWeek.reduce((n, r) => n + takeOf(r), 0);
+  const change = lastTakings > 0 ? Math.round(((takings - lastTakings) / lastTakings) * 100) : null;
+  const arriving = d.inbound.filter(s => s.status === 'in_transit');
+  const soon = (u) => u && (new Date(u) - new Date(today)) / 864e5 <= 3;
+  // one line per recalled product (it may have come in several deliveries)
+  const recalled = Object.values(d.stock.filter(s => s.recalled).reduce((m, s) => { m[`${s.productName}|${s.farmName}`] ||= s; return m; }, {}));
+  const useFirst = d.stock.filter(s => !s.recalled && soon(s.useBy)).sort((a, b) => new Date(a.useBy) - new Date(b.useBy));
+  const owed = owedByFarmOf(d.orders);
+  const owedTotal = Math.round(owed.reduce((n, f) => n + f.owed, 0) * 100) / 100;
+  // Badges diners collected from your bills, each of the last 7 days
+  const days = [...Array(7)].map((_, i) => new Date(Date.now() - (6 - i) * 864e5).toDateString());
+  const claimedPerDay = days.map(k => d.receipts.filter(r => r.claimed && r.claimedAt && dayKey(r.claimedAt) === k).length);
+  const claimedWeek = claimedPerDay.reduce((a, b) => a + b, 0);
+  const max = Math.max(1, ...claimedPerDay);
+  const spark = claimedPerDay.map((v, i) => `${i ? 'L' : 'M'}${(i / 6) * 150},${40 - (v / max) * 36}`).join(' ');
+  const day = (x) => new Date(x).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+
+  return (
+    <div className="space-y-6">
+      <PageTitle kicker={todayLabel()} title={`${greeting()}, ${restaurantUser.restaurantName} 👋`}
+        actions={[
+          <button key="o" onClick={() => go('order')} className="px-4 py-2.5 rounded-xl text-sm font-semibold bg-white border border-black/10 hover:bg-gray-100">🛒 Order stock</button>,
+          <button key="b" onClick={() => go('create')} className="px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-green-600 hover:bg-green-700 shadow-md">🧾 New bill</button>,
+        ]} />
+
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+        <StatTile icon="🧾" value={gbp(takings) || '£0.00'} label="Bills today" onClick={() => go('history')}
+          sub={`${billsToday.length} bill${billsToday.length === 1 ? '' : 's'}${change !== null ? ` · ${change >= 0 ? '▲' : '▼'} ${Math.abs(change)}% on last ${new Date().toLocaleDateString('en-GB', { weekday: 'long' })}` : ''}`} />
+        <StatTile icon="🚚" value={arriving.length} label="Arriving" sub={arriving.length ? 'Confirm them in one tap' : 'Nothing on its way'} tone="honey" onClick={() => go('deliveries')} />
+        <StatTile icon={recalled.length ? '🚨' : '⏰'} value={recalled.length || useFirst.length} label={recalled.length ? 'Recalled' : 'Use first'} sub={recalled.length ? 'Don’t use it: send it back or write it off' : 'Use-by in the next 3 days'} tone="coral" onClick={() => go('deliveries')} />
+        <StatTile icon="💷" value={gbp(owedTotal) || '£0.00'} label="Owed to farms" sub={owed.length ? owed.map(f => f.farm).join(', ') : 'All paid up'} tone="white" onClick={() => go('money')} />
+      </div>
+
+      {err && <p className="text-sm text-red-600 font-semibold">⚠️ {err}</p>}
+
+      <div className="grid xl:grid-cols-5 gap-4 items-start">
+        <Panel className="xl:col-span-3" title="🚚 Arriving" action={<button onClick={() => go('deliveries')} className="text-sm font-semibold text-green-700 hover:underline">All deliveries →</button>}>
+          {arriving.length === 0 ? (
+            <p className="text-sm text-gray-500">Nothing on its way right now. <button onClick={() => go('order')} className="text-green-700 font-semibold hover:underline">Order something?</button></p>
+          ) : (
+            <div className="space-y-3">
+              {arriving.map(s => (
+                <div key={s.shipmentId} className="rounded-2xl border border-black/5 bg-gray-50 p-4 flex gap-4 items-center flex-wrap">
+                  <div className="flex-1 min-w-[12rem]">
+                    <p className="font-bold">{formatQty(s.quantitySent, s.unit)} {s.productName} <span className="font-normal text-gray-500">· {s.fromName}</span></p>
+                    <p className="text-xs text-gray-500">{[s.orderRef, s.poNumber && `PO ${s.poNumber}`, `delivery #${s.shipmentId}`].filter(Boolean).join(' · ')}
+                      {s.lastStep ? <> · <span className="text-green-700 font-semibold">{s.lastStep.stage === 'Out for delivery' || /out for delivery/i.test(s.lastStep.notes || '') ? 'Out for delivery' : 'On its way'}</span></> : null}</p>
+                    {s.senderNote && <p className="text-xs text-gray-600 mt-0.5">💬 “{s.senderNote}”</p>}
+                  </div>
+                  <div className="flex gap-2 flex-wrap">
+                    <button onClick={() => go('deliveries')} className="px-3 py-2 rounded-xl bg-white border border-black/10 text-sm font-semibold hover:bg-gray-100">Something wrong?</button>
+                    <button onClick={() => allArrived(s)} disabled={!approved || busy !== null}
+                      className="px-3 py-2 rounded-xl text-white text-sm font-semibold bg-green-600 hover:bg-green-700 disabled:bg-gray-300">
+                      {busy === s.shipmentId ? '⛓️ Recording…' : '✅ All arrived'}</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+
+        <div className="xl:col-span-2 space-y-4">
+          <Panel title={recalled.length ? '🚨 Recalled & ⏰ use first' : '⏰ Use first'}>
+            {recalled.map(s => (
+              <p key={`r${s.shipmentId}`} className="text-sm text-red-800 bg-red-50 border border-red-200 rounded-xl px-3 py-2 mb-2">🚨 <strong>{s.productName}</strong> ({s.farmName}) is recalled. Don’t use it.</p>
+            ))}
+            {useFirst.length === 0 && !recalled.length ? (
+              <p className="text-sm text-gray-500">Nothing needs using up in the next few days. 👍</p>
+            ) : (
+              <div className="space-y-4">
+                {useFirst.slice(0, 6).map(s => (
+                  <div key={s.shipmentId}>
+                    <div className="flex justify-between gap-2 text-sm"><span className="font-semibold">{s.productName} <span className="text-gray-500 font-normal">· {formatQty(s.available, s.unit)}</span></span><span className="text-gray-500 shrink-0">{day(s.useBy)}</span></div>
+                    <div className="mt-1.5"><UseByBar useBy={s.useBy} /></div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+          <div className="rounded-3xl p-5 flex items-center gap-3 text-white" style={{ background: FP.forest }}>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-white/60 font-semibold uppercase tracking-wide">Diners this week</p>
+              <p className="text-2xl font-extrabold">{claimedWeek} badge{claimedWeek === 1 ? '' : 's'}</p>
+              <p className="text-xs text-white/70">claimed from your bills</p>
+            </div>
+            <svg width="150" height="44" viewBox="0 0 150 44" aria-hidden="true">
+              <path d={`${spark} L150,44 L0,44 Z`} fill="rgba(226,176,74,.25)" />
+              <path d={spark} fill="none" stroke={FP.honey} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────
+// v4.5 — Money: what you owe each farm, and what's been paid (invoices arrive here in v4.6)
+// ─────────────────────────────────────────────────────────
+function CafeMoney({ authHeader }) {
+  const [orders, setOrders] = useState(null);
+  useEffect(() => { axios.get(`${API_BASE}/restaurant/orders`, authHeader).then(r => setOrders(r.data.orders || [])).catch(() => setOrders([])); }, []);
+  if (!orders) return <Panel><p className="text-gray-500">⏳ Loading…</p></Panel>;
+  const owed = owedByFarmOf(orders);
+  const owedTotal = Math.round(owed.reduce((n, f) => n + f.owed, 0) * 100) / 100;
+  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  const paid = orders.filter(o => o.paymentStatus === 'paid');
+  const paidMonth = paid.filter(o => o.paidAt ? new Date(o.paidAt) >= monthStart : true);   // (all paid orders until payment dates are recorded)
+  const paidTotal = Math.round(paidMonth.reduce((n, o) => n + Number(o.owed ?? o.total ?? 0), 0) * 100) / 100;
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 gap-3">
+        <StatTile icon="💷" value={gbp(owedTotal) || '£0.00'} label="Owed to farms" sub={`${owed.length} farm${owed.length === 1 ? '' : 's'}`} tone="honey" />
+        <StatTile icon="✅" value={gbp(paidTotal) || '£0.00'} label="Paid" sub={`${paidMonth.length} order${paidMonth.length === 1 ? '' : 's'}`} />
+      </div>
+      <Panel title="💷 Owed to each farm">
+        <p className="text-xs text-gray-500 mb-3">Delivered orders the farm hasn't marked as paid yet. You only pay for what you accepted. Pay the farm directly; they tick it off.</p>
+        {owed.length === 0 ? <p className="text-sm text-gray-500">Nothing owed. 👍</p> : (
+          <div className="divide-y divide-black/5">
+            {owed.map(f => (
+              <div key={f.farm} className="py-3 flex justify-between gap-3">
+                <span className="font-semibold">{f.farm} <span className="text-gray-500 font-normal text-sm">· {f.orders} order{f.orders === 1 ? '' : 's'}</span></span>
+                <span className="font-extrabold">{gbp(f.owed)}{f.estimate && <span className="text-xs font-normal text-gray-500"> so far</span>}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+      <Panel title="🧾 Invoices">
+        <p className="text-sm text-gray-500">Coming next: every delivery you confirm will create its invoice here automatically, with its due date, and you can query one if something's not right.</p>
+      </Panel>
+    </div>
+  );
+}
+
 function CafeChecklist({ authHeader, emailVerified, approved, restaurantUser, go }) {
   const [d, setD] = useState(null);
   useEffect(() => {
@@ -1006,8 +1167,8 @@ function MeatOrder({ authHeader, approved, onOrdered }) {
             const inBasket = basket.filter(x => x.f.farmerAddress === f.farmerAddress).length;
             return (
               <button key={f.farmerAddress} onClick={() => { setFarmAddr(f.farmerAddress); setSpecies(f.species[0]?.species); }}
-                className={`text-left border-2 rounded-lg p-3 ${farmAddr === f.farmerAddress ? 'border-orange-500 bg-orange-50' : 'border-gray-200 hover:border-gray-300'}`}>
-                <p className="font-bold text-gray-800">{f.farmName || 'Farm'} {inBasket > 0 && <span className="text-xs bg-orange-600 text-white rounded-full px-2 py-0.5 ml-1">{inBasket} in order</span>}</p>
+                className={`text-left border-2 rounded-lg p-3 ${farmAddr === f.farmerAddress ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                <p className="font-bold text-gray-800">{f.farmName || 'Farm'} {inBasket > 0 && <span className="text-xs bg-green-600 text-white rounded-full px-2 py-0.5 ml-1">{inBasket} in order</span>}</p>
                 <p className="text-xs text-gray-600">{f.species.map(s => s.label).join(' · ')}</p>
                 <p className="text-xs text-green-700 font-semibold">{ready ? `${ready} cut${ready === 1 ? '' : 's'} ready now` : 'Pre-order only right now'}</p>
               </button>
@@ -1033,7 +1194,7 @@ function MeatOrder({ authHeader, approved, onOrdered }) {
                 const st = status(c, q);
                 const unavailable = c.inStock <= 0 && !c.preOrder;
                 return (
-                  <div key={k} className={`border rounded-lg p-3 flex flex-col ${q > 0 ? (st === 'short' ? 'border-red-400 bg-red-50' : 'border-orange-500 bg-orange-50') : 'border-gray-200'} ${unavailable ? 'opacity-50' : ''}`}>
+                  <div key={k} className={`border rounded-lg p-3 flex flex-col ${q > 0 ? (st === 'short' ? 'border-red-400 bg-red-50' : 'border-green-500 bg-green-50') : 'border-gray-200'} ${unavailable ? 'opacity-50' : ''}`}>
                     <div className="flex justify-between gap-2">
                       <p className="font-semibold text-gray-800">{c.productName}</p>
                       <p className="text-sm font-semibold text-gray-700 shrink-0">{c.pricePerKg !== null ? `${gbp(c.pricePerKg)}/kg` : <span className="text-xs text-gray-400 font-normal">price on request</span>}</p>
@@ -1071,7 +1232,7 @@ function MeatOrder({ authHeader, approved, onOrdered }) {
       </div>
 
       {(basket.length > 0 || message || error) && (
-        <div className="bg-white rounded-lg shadow-lg p-6 border-2 border-orange-500 sticky bottom-2">
+        <div className="bg-white rounded-lg shadow-lg p-6 border-2 border-green-500 sticky bottom-2">
           {basket.length > 0 && (
             <>
               <p className="font-bold text-gray-800 mb-2">🧺 Your meat order</p>
@@ -1108,7 +1269,7 @@ function MeatOrder({ authHeader, approved, onOrdered }) {
           {message && <p className="text-sm text-green-700 font-semibold mb-2">✅ {message}</p>}
           {basket.length > 0 && (
             <button onClick={place} disabled={busy || !approved || problems.length > 0}
-              className="w-full bg-orange-600 text-white py-3 rounded-lg font-bold hover:bg-orange-700 disabled:bg-gray-400">
+              className="w-full bg-green-600 text-white py-3 rounded-lg font-bold hover:bg-green-700 disabled:bg-gray-400">
               {busy ? '⏳ Ordering…' : !approved ? '🔒 Waiting for approval' : problems.length ? `Fix ${problems.length} item${problems.length === 1 ? '' : 's'} first` : `🛒 Place ${basket.length} order${basket.length === 1 ? '' : 's'}`}
             </button>
           )}
@@ -1209,8 +1370,8 @@ function ProduceOrder({ products, deals, authHeader, approved, onOrdered }) {
             const nDeals = f.items.filter(x => x.d).length;
             return (
               <button key={f.farmerAddress} onClick={() => { setFarmAddr(f.farmerAddress); setGroup(null); }}
-                className={`text-left border-2 rounded-lg p-3 ${farm?.farmerAddress === f.farmerAddress ? 'border-orange-500 bg-orange-50' : 'border-gray-200 hover:border-gray-300'}`}>
-                <p className="font-bold text-gray-800">{f.farmName || 'Farm'} {inBasket > 0 && <span className="text-xs bg-orange-600 text-white rounded-full px-2 py-0.5 ml-1">{inBasket} in order</span>}</p>
+                className={`text-left border-2 rounded-lg p-3 ${farm?.farmerAddress === f.farmerAddress ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                <p className="font-bold text-gray-800">{f.farmName || 'Farm'} {inBasket > 0 && <span className="text-xs bg-green-600 text-white rounded-full px-2 py-0.5 ml-1">{inBasket} in order</span>}</p>
                 <p className="text-xs text-gray-600">{[...new Set(f.items.filter(x => !x.d).map(x => x.group))].sort((a, b) => groupRank(a) - groupRank(b)).join(' · ')}</p>
                 <p className="text-xs text-green-700 font-semibold">{f.items.filter(x => !x.d).length} product{f.items.filter(x => !x.d).length === 1 ? '' : 's'}{nDeals ? <span className="text-amber-700"> · 🏷️ {nDeals} deal{nDeals === 1 ? '' : 's'}</span> : null}</p>
               </button>
@@ -1235,7 +1396,7 @@ function ProduceOrder({ products, deals, authHeader, approved, onOrdered }) {
                 const left = lasting(x);
                 const tooMuch = q > left;
                 return (
-                  <div key={x.k} className={`border rounded-lg p-3 flex flex-col ${q > 0 ? (tooMuch ? 'border-red-400 bg-red-50' : 'border-orange-500 bg-orange-50') : x.d ? 'border-amber-300 bg-amber-50' : 'border-gray-200'}`}>
+                  <div key={x.k} className={`border rounded-lg p-3 flex flex-col ${q > 0 ? (tooMuch ? 'border-red-400 bg-red-50' : 'border-green-500 bg-green-50') : x.d ? 'border-amber-300 bg-amber-50' : 'border-gray-200'}`}>
                     <div className="flex justify-between gap-2">
                       <p className="font-semibold text-gray-800">{x.name}</p>
                       <p className="text-sm font-semibold text-gray-700 shrink-0 text-right">
@@ -1270,7 +1431,7 @@ function ProduceOrder({ products, deals, authHeader, approved, onOrdered }) {
       </div>
 
       {(basket.length > 0 || message || error) && (
-        <div className="bg-white rounded-lg shadow-lg p-6 border-2 border-orange-500 sticky bottom-2">
+        <div className="bg-white rounded-lg shadow-lg p-6 border-2 border-green-500 sticky bottom-2">
           {basket.length > 0 && (
             <>
               <p className="font-bold text-gray-800 mb-2">🧺 Your order</p>
@@ -1304,7 +1465,7 @@ function ProduceOrder({ products, deals, authHeader, approved, onOrdered }) {
           {message && <p className="text-sm text-green-700 font-semibold mb-2">✅ {message}</p>}
           {basket.length > 0 && (
             <button onClick={place} disabled={busy || !approved || short.length > 0}
-              className="w-full bg-orange-600 text-white py-3 rounded-lg font-bold hover:bg-orange-700 disabled:bg-gray-400">
+              className="w-full bg-green-600 text-white py-3 rounded-lg font-bold hover:bg-green-700 disabled:bg-gray-400">
               {busy ? '⏳ Ordering…' : !approved ? '🔒 Waiting for approval' : short.length ? `Fix ${short.length} item${short.length === 1 ? '' : 's'} first` : `🛒 Place ${basket.length} order${basket.length === 1 ? '' : 's'}`}
             </button>
           )}
@@ -1399,7 +1560,7 @@ function DishManager({ dishes, authHeader, onChanged }) {
       )}
 
       {!form ? (
-        <button type="button" onClick={() => setForm(blank)} className="bg-orange-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-orange-700">+ Add a dish</button>
+        <button type="button" onClick={() => setForm(blank)} className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700">+ Add a dish</button>
       ) : (
         <form onSubmit={save} className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-3">
           <div className="flex gap-2 flex-wrap">
@@ -1431,7 +1592,7 @@ function DishManager({ dishes, authHeader, onChanged }) {
             {products.length === 0 && <p className="text-xs text-gray-400 mt-1">Products appear here once you've received a delivery.</p>}
           </div>
           <div className="flex gap-2">
-            <button type="submit" disabled={busy} className="bg-orange-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-orange-700 disabled:bg-gray-400">
+            <button type="submit" disabled={busy} className="bg-green-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400">
               {busy ? 'Saving…' : 'Save dish'}
             </button>
             <button type="button" onClick={() => setForm(null)} className="text-sm text-gray-600 hover:underline">Cancel</button>
@@ -1733,7 +1894,7 @@ function Deliveries({ authHeader, approved, onReceived }) {
                   <p className="text-xs text-gray-500">
                     #{s.shipmentId} · received {formatQty(s.quantityReceived, s.unit)} of {formatQty(s.quantitySent, s.unit)} <TxLink hash={s.receivedTxHash} label="Received" className="ml-1" />
                     {s.quantityRejected > 0 && <> · ↩️ {formatQty(s.quantityRejected, s.unit)} refused</>}
-                    {s.shortfall > 0 && <span className="text-orange-600 font-semibold"> · ⚠️ {formatQty(s.shortfall, s.unit)} missing</span>}
+                    {s.shortfall > 0 && <span className="text-green-600 font-semibold"> · ⚠️ {formatQty(s.shortfall, s.unit)} missing</span>}
                     {s.wasted > 0 && <> · 🗑️ {formatQty(s.wasted, s.unit)} written off</>}
                   </p>
                   {s.useBy && (
@@ -1899,7 +2060,7 @@ function ReceiptHistory({ restaurantToken, onLogout }) {
             <p className="font-mono text-xs text-gray-400 break-all">Batch: {r.batchId}</p>
             <button
               onClick={() => setOpenQR(openQR === r.receiptId ? null : r.receiptId)}
-              className="text-sm font-semibold text-orange-600 hover:text-orange-700"
+              className="text-sm font-semibold text-green-600 hover:text-green-700"
             >
               {openQR === r.receiptId ? 'Hide QR' : 'Show QR'}
             </button>

@@ -85,7 +85,9 @@ function rowsFromCsv(text) {
 
 const today = () => new Date().toISOString().slice(0, 10);
 
-export default function ProcessorPanel({ account, participants }) {
+// v4.5: framed = inside the dashboard frame (the sidebar shows the sections, so no header or tab bar here);
+//       tab / onTab let the frame choose the section. 'today' is the new at-a-glance board.
+export default function ProcessorPanel({ account, participants, framed = false, tab = null, onTab = null, onData = null }) {
   const [token, setToken] = useState(() => {
     try { const t = JSON.parse(sessionStorage.getItem('fp_processor') || 'null'); return t?.account === account ? t.token : null; } catch { return null; }
   });
@@ -98,7 +100,9 @@ export default function ProcessorPanel({ account, participants }) {
   const [ptab, setPtabState] = useState(() => {
     try { const t = sessionStorage.getItem('fp_proc_tab'); return ['animals', 'kill', 'stock', 'orders', 'settings'].includes(t) ? t : 'animals'; } catch { return 'animals'; }
   });
-  const setPtab = (t) => { setPtabState(t); try { sessionStorage.setItem('fp_proc_tab', t); } catch { /* fine */ } };
+  const setPtabLocal = (t) => { setPtabState(t); try { sessionStorage.setItem('fp_proc_tab', t); } catch { /* fine */ } };
+  const setPtab = onTab || setPtabLocal;
+  const shown = tab || ptab;
 
   const load = async () => {
     try {
@@ -107,6 +111,7 @@ export default function ProcessorPanel({ account, participants }) {
         axios.get(`${API_BASE}/processor/orders`, auth).catch(() => ({ data: { orders: [] } }))
       ]);
       setData({ ...r.data, orders: o.data.orders || [] });
+      onData?.({ ...r.data, orders: o.data.orders || [] });
     } catch (err) {
       if (err.response?.status === 403 || err.response?.status === 401) { setToken(null); try { sessionStorage.removeItem('fp_processor'); } catch { /* */ } }
       setError(err.response?.data?.error || 'Could not load');
@@ -175,6 +180,7 @@ export default function ProcessorPanel({ account, participants }) {
   const ready = data.orders.filter(o => o.ready).length;
   return (
     <div className="space-y-6">
+      {!framed && <>
       <div className="bg-red-50 border-2 border-red-200 rounded-lg p-4">
         <p className="font-bold text-red-900">🔪 {data.me.name} · approval no. {data.me.approvalNumber}</p>
         <p className="text-xs text-red-800">Animals in → kill sheet → carcasses → cutting → café orders. Every step is on the blockchain.</p>
@@ -201,6 +207,7 @@ export default function ProcessorPanel({ account, participants }) {
           ))}
         </div>
       </div>
+      </>}
       {error && <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-red-700 text-sm font-semibold">⚠️ {error}</div>}
       {message && <div className="bg-green-50 border border-green-300 rounded-lg p-3 text-green-700 text-sm font-semibold">✅ {message}</div>}
 
@@ -211,11 +218,12 @@ export default function ProcessorPanel({ account, participants }) {
           {data.refusedComingBack.map(s => <ReturnCheck key={s.shipmentId} s={s} token={token} base="processor" onDone={load} />)}
         </div>
       )}
-      {ptab === 'animals' && <AnimalsIn data={data} auth={auth} busy={busy} post={post} />}
-      {ptab === 'kill' && <KillSheet post={post} busy={busy} waiting={data.animalsHere} />}
-      {ptab === 'stock' && <MadeHere data={data} post={post} postMany={postMany} busy={busy} participants={participants} />}
-      {ptab === 'orders' && <OrdersToSend data={data} post={post} busy={busy} participants={participants} />}
-      {ptab === 'settings' && <><AlertSettings token={token} /><ChainHelp who="abattoir" /></>}
+      {shown === 'today' && <AbattoirToday data={data} go={setPtab} />}
+      {shown === 'animals' && <AnimalsIn data={data} auth={auth} busy={busy} post={post} />}
+      {shown === 'kill' && <KillSheet post={post} busy={busy} waiting={data.animalsHere} />}
+      {shown === 'stock' && <MadeHere data={data} post={post} postMany={postMany} busy={busy} participants={participants} />}
+      {shown === 'orders' && <OrdersToSend data={data} post={post} busy={busy} participants={participants} />}
+      {shown === 'settings' && <><AlertSettings token={token} /><ChainHelp who="abattoir" /></>}
     </div>
   );
 }
@@ -283,7 +291,7 @@ function AnimalsIn({ data, auth, busy, post }) {
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
-      <h3 className="text-lg font-bold text-gray-800 mb-1">1. Animals in</h3>
+      <h3 className="text-lg font-bold text-gray-800 mb-1">Animals in</h3>
       <p className="text-sm text-gray-500 mb-3">Confirm animals when they arrive in lairage, or refuse them. Check their Food Chain Information.</p>
       {data.animalsComing.length === 0 && data.animalsHere.length === 0 && <p className="text-sm text-gray-500">No animals on the way or waiting.</p>}
       <div className="space-y-3">
@@ -389,7 +397,7 @@ function KillSheet({ post, busy, waiting }) {
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
-      <h3 className="text-lg font-bold text-gray-800 mb-1">2. Kill sheet</h3>
+      <h3 className="text-lg font-bold text-gray-800 mb-1">Kill sheet</h3>
       <p className="text-sm text-gray-500 mb-3">
         At the end of the kill, upload the day's kill sheet as a CSV (export it from your system, or fill in the template).
         One row per animal for cattle; one row per batch for lambs and pigs. Carcasses that fail inspection: status <code>condemned</code>.
@@ -631,7 +639,7 @@ function MadeHere({ data, post, postMany, busy, participants }) {
     <div className="bg-white rounded-lg shadow-lg p-6">
       <div className="flex justify-between items-center mb-1 flex-wrap gap-2">
         {askNode}
-        <h3 className="text-lg font-bold text-gray-800">3. Carcasses & cuts</h3>
+        <h3 className="text-lg font-bold text-gray-800">Carcasses & cuts</h3>
         {labelHint && <p className="w-full text-xs text-red-600">Your browser blocked the print window: allow pop-ups for this site, then try 🏷️ Labels again.</p>}
         <div className="flex text-xs border border-gray-300 rounded-lg overflow-hidden">
           {[['now', 'Here now'], ['history', `📜 History (${all.length})`]].map(([k, label]) => (
@@ -1088,7 +1096,7 @@ function OrdersToSend({ data, post, busy, participants }) {
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
       {askNode}
-      <h3 className="text-lg font-bold text-gray-800 mb-1">4. Café orders to send</h3>
+      <h3 className="text-lg font-bold text-gray-800 mb-1">Café orders to send</h3>
       <p className="text-sm text-gray-500 mb-3">Cafés order cuts from a farm's meat prices. When the cuts are here, send them straight to the café, all at once or part now and the rest later.</p>
       {data.orders.length === 0 && <p className="text-sm text-gray-500">No café orders for meat you're holding.</p>}
 
@@ -1196,6 +1204,85 @@ function OrdersToSend({ data, post, busy, participants }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// v4.5 — Today: from farm to cuts at a glance (arriving → waiting to kill → carcasses hanging → cuts), and café orders to pack
+// ─────────────────────────────────────────────
+function AbattoirToday({ data, go }) {
+  const day = (d) => (d ? new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '');
+  const daysSince = (d) => (d ? Math.max(0, Math.floor((Date.now() - new Date(d)) / 864e5)) : null);
+  const live = (b) => !b.recalled && b.remaining > 0;
+  const carcasses = data.madeHere.filter(b => live(b) && b.kind === 'Slaughter');
+  const cuts = data.madeHere.filter(b => live(b) && b.kind !== 'Slaughter');
+  const ready = data.orders.filter(o => o.ready);
+  const fciMissing = [...data.animalsComing, ...data.animalsHere].filter(s => s.fciProvided === false).length;
+  const kgIn = data.madeHere.filter(b => b.kind === 'Slaughter').reduce((n, b) => n + (b.unit === 'kg' ? b.quantity : 0), 0);
+  const kgCut = data.madeHere.filter(b => b.kind !== 'Slaughter').reduce((n, b) => n + (b.unit === 'kg' ? b.quantity : 0), 0);
+  const yieldPct = kgIn > 0 ? Math.round((kgCut / kgIn) * 100) : null;
+  const cols = [
+    ['🚛 Arriving', '#E2B04A', 'animals', data.animalsComing.map(s => ({ id: `a${s.shipmentId}`, top: s.animalRef || s.batchId, main: `${s.fromName} · ${formatQty(s.quantitySent, s.unit)} ${s.productName}`, tag: s.fciProvided === false ? ['FCI needed', 'bad'] : ['FCI ✓', 'ok'] }))],
+    ['🔪 Waiting to kill', '#E0644B', 'kill', data.animalsHere.map(s => ({ id: `h${s.shipmentId}`, top: s.animalRef || s.batchId, main: `${s.fromName} · ${formatQty(s.available, s.unit)} ${s.productName}`, tag: s.fciProvided === false ? ['FCI needed', 'bad'] : ['Ready', 'ok'] }))],
+    ['❄️ Carcasses hanging', '#6FA0C8', 'stock', carcasses.map(b => ({ id: b.batchId, top: b.lotRef ? `Kill no. ${b.lotRef}` : b.batchId, main: `${formatQty(b.remaining, b.unit)} ${b.productName}`, tag: [`${daysSince(b.madeOn || b.createdAt)} days · ${b.farmName || ''}`, 'n'] }))],
+    ['🥩 Cuts in stock', '#2F6B3A', 'stock', cuts.map(b => ({ id: b.batchId, top: b.farmName || b.batchId, main: `${formatQty(b.remaining, b.unit)} ${b.productName}`, tag: [b.useBy ? `use by ${day(b.useBy)}` : 'no use-by', 'n'] }))],
+  ];
+  const tagCls = { bad: 'bg-red-100 text-red-800', ok: 'bg-green-100 text-green-800', n: 'bg-gray-100 text-gray-700' };
+  const tile = (icon, value, label, sub, bg, t) => (
+    <button onClick={() => go(t)} className="bg-white rounded-3xl border border-black/5 p-4 sm:p-5 text-left hover:shadow-md transition-shadow">
+      <span className="w-10 h-10 rounded-xl flex items-center justify-center text-lg mb-3" style={{ background: bg }}>{icon}</span>
+      <p className="text-2xl sm:text-3xl font-extrabold tracking-tight">{value}</p>
+      <p className="text-sm text-gray-700 font-semibold">{label}</p>
+      <p className="text-xs text-gray-500 mt-1">{sub}</p>
+    </button>
+  );
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+        {tile('🐄', data.animalsComing.length, 'Deliveries arriving', fciMissing ? `${fciMissing} still need FCI` : 'All have FCI', '#FBF0D6', 'animals')}
+        {tile('🔪', data.animalsHere.length, 'Waiting to kill', 'On site now', '#FBE3DD', 'kill')}
+        {tile('⚖️', yieldPct !== null ? `${yieldPct}%` : '—', 'Yield', 'Carcass weight → cuts made', '#E3EDE3', 'stock')}
+        {tile('🧾', ready.length, 'Café orders to pack', `${data.orders.length} open in total`, '#F6F6F2', 'orders')}
+      </div>
+      <div className="bg-white rounded-3xl border border-black/5 p-5 sm:p-6">
+        <h2 className="text-lg font-bold mb-4">From farm to cuts</h2>
+        <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-3">
+          {cols.map(([title, color, t, items]) => (
+            <div key={title} className="rounded-2xl p-3 bg-gray-50">
+              <button onClick={() => go(t)} className="w-full flex items-center justify-between mb-3 px-1 text-left">
+                <span className="font-bold text-sm">{title}</span>
+                <span className="w-6 h-6 rounded-full text-xs font-bold text-white flex items-center justify-center" style={{ background: color }}>{items.length}</span>
+              </button>
+              <div className="space-y-2">
+                {items.length === 0 && <p className="text-xs text-gray-400 px-1">Nothing here</p>}
+                {items.slice(0, 5).map(x => (
+                  <button key={x.id} onClick={() => go(t)} className="w-full text-left bg-white rounded-xl border border-black/5 p-3 hover:shadow-sm" style={{ borderLeft: `4px solid ${color}` }}>
+                    <p className="font-mono text-[11px] text-gray-500 truncate">{x.top}</p>
+                    <p className="font-semibold text-sm">{x.main}</p>
+                    <span className={`inline-block mt-1 text-[11px] font-bold px-2 py-0.5 rounded-full ${tagCls[x.tag[1]]}`}>{x.tag[0]}</span>
+                  </button>
+                ))}
+                {items.length > 5 && <button onClick={() => go(t)} className="text-xs font-semibold text-green-700 px-1">+{items.length - 5} more →</button>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="bg-white rounded-3xl border border-black/5 p-5 sm:p-6">
+        <div className="flex justify-between items-center mb-3"><h2 className="text-lg font-bold">🧾 Café orders</h2><button onClick={() => go('orders')} className="text-sm font-semibold text-green-700 hover:underline">Pack & send →</button></div>
+        {data.orders.length === 0 ? <p className="text-sm text-gray-500">No café orders right now.</p> : (
+          <div className="divide-y divide-black/5">
+            {data.orders.slice(0, 6).map(o => (
+              <div key={o.id} className="py-2.5 flex gap-3 items-center justify-between flex-wrap">
+                <div><p className="font-semibold text-sm">{formatQty(o.quantity, o.unit || 'kg')} {o.productName} <span className="text-gray-500 font-normal">· {o.farmName || ''}</span></p>
+                  <p className="text-xs text-gray-500">{o.restaurantName}{o.frozen ? ' · ❄️ frozen' : ''}{o.neededUntil ? ` · by ${day(o.neededUntil)}` : ''}</p></div>
+                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${o.ready ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>{o.ready ? 'Ready to pack' : 'Not cut yet'}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

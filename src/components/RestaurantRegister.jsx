@@ -80,7 +80,7 @@ function RestaurantRegister({ onRegister, onSwitchToLogin }) {
               value={restaurantName}
               onChange={(e) => setRestaurantName(e.target.value)}
               placeholder="e.g. The Green Table"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-600 focus:border-transparent"
               required
             />
           </div>
@@ -92,7 +92,7 @@ function RestaurantRegister({ onRegister, onSwitchToLogin }) {
               value={postcode}
               onChange={(e) => setPostcode(e.target.value)}
               placeholder="e.g. SW1A 1AA"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-600 focus:border-transparent"
               required
             />
             <p className="text-xs text-gray-400 mt-1">Used so customers can discover your restaurant</p>
@@ -108,7 +108,7 @@ function RestaurantRegister({ onRegister, onSwitchToLogin }) {
               onChange={(e) => setBusinessRef(e.target.value)}
               placeholder="e.g. council registration ref or 01234567"
               maxLength={60}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-600 focus:border-transparent"
             />
             <p className="text-xs text-gray-400 mt-1">We check this before approving your account</p>
           </div>
@@ -120,7 +120,7 @@ function RestaurantRegister({ onRegister, onSwitchToLogin }) {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="your@restaurant.com"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-600 focus:border-transparent"
               required
             />
           </div>
@@ -132,7 +132,7 @@ function RestaurantRegister({ onRegister, onSwitchToLogin }) {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="At least 6 characters"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-600 focus:border-transparent"
               required
             />
           </div>
@@ -144,7 +144,7 @@ function RestaurantRegister({ onRegister, onSwitchToLogin }) {
               value={confirmPwd}
               onChange={(e) => setConfirmPwd(e.target.value)}
               placeholder="Re-enter password"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-600 focus:border-transparent"
               required
             />
           </div>
@@ -162,7 +162,7 @@ function RestaurantRegister({ onRegister, onSwitchToLogin }) {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-orange-600 text-white py-3 rounded-lg hover:bg-orange-700 transition font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed"
+            className="w-full bg-green-700 text-white py-3 rounded-lg hover:bg-green-800 transition font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed"
           >
             {loading ? 'Creating account…' : 'Create Restaurant Account'}
           </button>
@@ -173,7 +173,7 @@ function RestaurantRegister({ onRegister, onSwitchToLogin }) {
             Already have an account?{' '}
             <button
               onClick={onSwitchToLogin}
-              className="text-orange-600 hover:underline font-semibold"
+              className="text-green-700 hover:underline font-semibold"
             >
               Login
             </button>

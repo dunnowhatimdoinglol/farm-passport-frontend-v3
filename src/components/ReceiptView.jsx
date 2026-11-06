@@ -184,31 +184,38 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack, onLoginRequired 
         />
       )}
 
-      {/* ── The receipt ── */}
-      <div className="bg-white rounded-lg shadow-lg p-8">
-        <div className="text-center mb-6">
-          <div className="text-6xl mb-3">🧾</div>
-          <h2 className="text-3xl font-bold text-gray-800 mb-1">Your Receipt</h2>
-          <p className="text-gray-600 text-lg">from <strong>{restaurantName}</strong></p>
+      {/* ── The receipt ── v4.5: the story comes first */}
+      <div className="relative overflow-hidden rounded-3xl p-7 sm:p-9 text-white" style={{ background: 'linear-gradient(135deg,#13261A 0%,#2F6B3A 100%)' }}>
+        <div className="absolute -right-10 -top-10 w-56 h-56 rounded-full bg-white/5" aria-hidden="true" />
+        <div className="absolute right-16 -bottom-16 w-40 h-40 rounded-full bg-white/5" aria-hidden="true" />
+        <div className="relative">
+          <p className="text-green-200 text-sm font-semibold">🧾 Your receipt from {restaurantName}</p>
+          <h2 className="text-3xl sm:text-4xl font-extrabold tracking-tight mt-2 leading-tight">
+            {farms.length > 1 ? `Your meal came from ${farms.length} farms` : `Your meal came from ${farmText || 'a local farm'}`}
+          </h2>
+          <p className="text-green-100/90 mt-2 text-sm">
+            {products.length > 1 ? `${products.length} products, each with its journey recorded on the blockchain.` : 'Its journey is recorded on the blockchain, from field to plate.'}
+          </p>
+          <div className="flex gap-8 mt-6 flex-wrap">
+            {amountPaid !== undefined && amountPaid !== null && (
+              <div>
+                <p className="text-xs text-green-200 uppercase tracking-wide">Amount paid</p>
+                <p className="text-2xl font-bold">{money(amountPaid)}</p>
+              </div>
+            )}
+            {createdAt && (
+              <div>
+                <p className="text-xs text-green-200 uppercase tracking-wide">Date</p>
+                <p className="text-2xl font-bold">
+                  {new Date(createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+                </p>
+              </div>
+            )}
+          </div>
         </div>
+      </div>
 
-        <div className="flex justify-center gap-10 mb-6 flex-wrap">
-          {amountPaid !== undefined && amountPaid !== null && (
-            <div className="text-center">
-              <p className="text-sm text-gray-500 uppercase tracking-wide">Amount Paid</p>
-              <p className="text-3xl font-bold text-gray-800">{money(amountPaid)}</p>
-            </div>
-          )}
-          {createdAt && (
-            <div className="text-center">
-              <p className="text-sm text-gray-500 uppercase tracking-wide">Date</p>
-              <p className="text-xl font-semibold text-gray-800">
-                {new Date(createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
-              </p>
-            </div>
-          )}
-        </div>
-
+      <div className="bg-white rounded-lg shadow-lg p-6 sm:p-8">
         {/* The bill (v4.1 receipts with dishes) */}
         {lines.length > 0 && (
           <div className="border border-gray-200 rounded-lg p-5 mb-6">
@@ -324,7 +331,8 @@ function ReceiptView({ receiptId, authToken, onSuccess, onBack, onLoginRequired 
       ) : (
         <div className="bg-white rounded-lg shadow-lg p-8">
           <div className="text-center">
-            <div className="text-6xl mb-4">🎖️</div>
+            {/* v4.5: Maru waits by the claim button (tap him to say hello) */}
+            <div className="flex justify-center mb-2"><Maru mode="sit" size={110} say="Your badge is waiting!" /></div>
             <h3 className="text-2xl font-bold text-gray-800 mb-2">
               {haveBadge && willStamp && !willBadge ? `Claim ${willStamp > 1 ? `${willStamp} Stamps` : 'Your Stamp'}!`
                 : haveBadge && willStamp ? `Claim ${claimWhat}!`

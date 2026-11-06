@@ -1,3 +1,51 @@
+/* Farm Passport v4.5 — the home page's look, everywhere */
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  body { background: #F6F6F2; color: #141414; -webkit-font-smoothing: antialiased; }
+  h1, h2, h3 { letter-spacing: -0.015em; text-wrap: balance; }
+}
+
+/* ── Everything inside the app (not the home page, which has its own styles) ── */
+.fp-app { font-family: Manrope, system-ui, -apple-system, sans-serif; }
+
+/* Cards: a hairline edge like the home page's cards */
+.fp-app .bg-white.shadow-lg, .fp-app .bg-white.shadow-md, .fp-app .bg-white.shadow { border: 1px solid rgba(20,20,20,.05); }
+
+/* Buttons: the home page's gentle lift */
+.fp-app button { transition: transform .3s cubic-bezier(.22,1,.36,1), box-shadow .3s, background-color .25s, color .2s, border-color .2s; }
+.fp-app button:not(:disabled):active { transform: scale(.98); }
+.fp-app button:is(.bg-green-600, .bg-green-700, .bg-orange-600, .bg-orange-500, .bg-blue-600, .bg-teal-600, .bg-gray-700, .bg-gray-800, .bg-red-600, .bg-amber-600):not(:disabled):hover {
+  transform: translateY(-1px); box-shadow: 0 8px 18px -6px rgba(31,90,46,.35);
+}
+.fp-app button:focus-visible, .fp-app a:focus-visible { outline: 2px solid #1F5A2E; outline-offset: 2px; }
+
+/* Inputs: soft rounded fields with a green focus ring */
+.fp-app :is(input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea) { border-radius: .75rem; background-color: #fff; }
+.fp-app :is(input, select, textarea):focus { outline: none; border-color: #2F6B3A; box-shadow: 0 0 0 3px rgba(47,107,58,.15); }
+
+/* Pages ease in, a section at a time */
+.fp-page > * { animation: fp-in .6s cubic-bezier(.22,1,.36,1) both; }
+.fp-page > *:nth-child(2) { animation-delay: .05s; } .fp-page > *:nth-child(3) { animation-delay: .1s; }
+.fp-page > *:nth-child(4) { animation-delay: .15s; } .fp-page > *:nth-child(n+5) { animation-delay: .2s; }
+@keyframes fp-in { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+
+/* Shared pieces */
+.fp-gradient { background: linear-gradient(90deg,#0d1f12,#2F6B3A 55%,#6b8f4e); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.fp-gradient-clay { background: linear-gradient(90deg,#3a1d0e,#96461F 50%,#C96D35); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.fp-glow { position: absolute; pointer-events: none; width: 340px; height: 340px; border-radius: 9999px; right: -110px; top: -150px;
+  background: radial-gradient(circle, rgba(47,107,58,.14), rgba(214,180,96,.10) 45%, transparent 70%); animation: fp-drift 14s ease-in-out infinite alternate; }
+.fp-glow-clay { background: radial-gradient(circle, rgba(201,109,53,.16), rgba(214,180,96,.12) 45%, transparent 70%); }
+@keyframes fp-drift { from { transform: translate(0,0) scale(1); } to { transform: translate(-30px,24px) scale(1.08); } }
+.fp-pulse { animation: fp-pulse 2s ease-in-out infinite; }
+@keyframes fp-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(47,107,58,.45); } 50% { box-shadow: 0 0 0 6px rgba(47,107,58,0); } }
+.fp-tabs-indicator { transition: left .5s cubic-bezier(.22,1,.36,1), width .5s cubic-bezier(.22,1,.36,1); }
+
+@media (prefers-reduced-motion: reduce) {
+  .fp-page > *, .fp-glow, .fp-pulse { animation: none; }
+  .fp-app button, .fp-tabs-indicator { transition: none; }
+}

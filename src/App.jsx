@@ -18,6 +18,7 @@ import Leaderboard from './components/Leaderboard';
 import SupplyChainPage from './components/SupplyChainPage';
 import AdminPage from './components/AdminPage';
 import Maru from './components/Maru';
+import AppNav from './components/AppNav';
 import HomePage from './components/HomePage';
 import LegalPage from './components/LegalPage';
 import { parseFarmLink } from './components/walletHelpers';
@@ -299,134 +300,62 @@ function App() {
     );
   }
 
+  // v4.5: the floating top bar (same buttons as before)
+  const topNav = (
+    <AppNav
+      current={currentView}
+      user={user}
+      restaurantName={restaurantName}
+      onHome={goHome}
+      onScan={handleBackToScanner}
+      onProfile={handleViewBadges}
+      onGo={(v) => setCurrentView(v)}
+      onLogout={handleLogout}
+      onRestaurantLogout={handleRestaurantLogout}
+      onLogin={openLoginModal}
+    />
+  );
+
+  // v4.5: dashboards fill the screen with their own sidebar (signed out, they show the top bar instead)
+  if (currentView === 'farmer' && !user) {
+    return (
+      <>
+        {authModal}
+        <FarmerPortal onBackToCustomer={goHome} startOn={portalStart} topNav={topNav} />
+      </>
+    );
+  }
+  if (currentView === 'supply') {
+    return (
+      <>
+        {authModal}
+        <SupplyChainPage onBack={handleBackToScanner} onHome={goHome} topNav={topNav} />
+      </>
+    );
+  }
+  if (currentView === 'admin') {
+    return (
+      <>
+        {authModal}
+        <AdminPage onBack={handleBackToScanner} onHome={goHome} topNav={topNav} />
+      </>
+    );
+  }
+  if (currentView === 'restaurant') {
+    return (
+      <>
+        {authModal}
+        <RestaurantPortal onBack={handleBackToScanner} onHome={goHome} topNav={topNav} startOn={portalStart} />
+      </>
+    );
+  }
+
   return (
-<div className="min-h-screen bg-red-500 p-4 pb-24">      {/* Email verification banner */}
-        <div className="max-w-4xl mx-auto">
-           <EmailVerificationBanner authToken={token} />
-
-        {/* ── Header / nav bar ── */}
-        <div className="text-center mb-6 pt-4">
-          <h1 className="text-4xl font-bold text-green-600 mb-1">
-            <button onClick={goHome} className="hover:opacity-80 transition" title="Back to the home page">🌾 Farm Passport</button>
-          </h1>
-          <p className="text-gray-500 text-sm">Scan produce to discover its story</p>
-
-          <div className="mt-3 flex gap-2 justify-center flex-wrap">
-            <button
-              onClick={goHome}
-              className="bg-white text-green-700 px-4 py-1.5 rounded-lg font-semibold hover:bg-green-50 transition text-sm"
-            >
-              🏠 Home
-            </button>
-            {currentView !== 'scanner' && (
-              <button
-                onClick={handleBackToScanner}
-                className="text-green-700 hover:text-green-800 font-semibold text-sm underline"
-              >
-                ← Scan Another
-              </button>
-            )}
-
-            {user ? (
-              <>
-               <button
-  onClick={handleViewBadges}
-  className="bg-green-600 text-white px-4 py-1.5 rounded-lg font-semibold hover:bg-green-700 transition text-sm"
->
-  👤 Profile
-</button>
-
-                <button
-                  onClick={() => setCurrentView('farmer')}
-                  className="bg-blue-600 text-white px-4 py-1.5 rounded-lg font-semibold hover:bg-blue-700 transition text-sm"
-                >
-                  👨‍🌾 Farmer Portal
-                </button>
-
-                <button
-                  onClick={() => setCurrentView('restaurant')}
-                  className="bg-orange-600 text-white px-4 py-1.5 rounded-lg font-semibold hover:bg-orange-700 transition text-sm"
-                >
-                  🍽️ Restaurant
-                </button>
-
-                <button
-                  onClick={() => setCurrentView('supply')}
-                  className="bg-teal-600 text-white px-4 py-1.5 rounded-lg font-semibold hover:bg-teal-700 transition text-sm"
-                >
-                  🚚 Supply Chain
-                </button>
-
-                <button
-                 onClick={() => setCurrentView('leaderboard')}
-                 className="bg-purple-600 text-white px-4 py-1.5 rounded-lg font-semibold hover:bg-purple-700 transition text-sm"
-                 >
-                    🏆 Leaderboard
-                 </button>
-
-                <button
-                  onClick={handleLogout}
-                  className="text-gray-500 hover:text-gray-700 font-semibold text-sm"
-                >
-                  Logout
-                </button>
-
-                <p className="text-xs text-gray-400 w-full mt-1">Logged in as {user.email}</p>
-              </>
-            ) : (
-              <>
-                <button
-                  onClick={handleViewBadges}
-                  className="bg-green-600 text-white px-4 py-1.5 rounded-lg font-semibold hover:bg-green-700 transition text-sm"
-                >
-                  👤 Profile
-                </button>
-
-                <button
-                  onClick={() => setCurrentView('farmer')}
-                  className="bg-blue-600 text-white px-4 py-1.5 rounded-lg font-semibold hover:bg-blue-700 transition text-sm"
-                >
-                  👨‍🌾 Farmer Portal
-                </button>
-
-                <button
-                  onClick={() => setCurrentView('restaurant')}
-                  className="bg-orange-600 text-white px-4 py-1.5 rounded-lg font-semibold hover:bg-orange-700 transition text-sm"
-                >
-                  🍽️ Restaurant
-                </button>
-
-                <button
-                  onClick={() => setCurrentView('supply')}
-                  className="bg-teal-600 text-white px-4 py-1.5 rounded-lg font-semibold hover:bg-teal-700 transition text-sm"
-                >
-                  🚚 Supply Chain
-                </button>
-
-                {restaurantName ? (
-                  <>
-                    <button
-                      onClick={handleRestaurantLogout}
-                      className="text-gray-500 hover:text-gray-700 font-semibold text-sm"
-                    >
-                      Logout
-                    </button>
-                    <p className="text-xs text-gray-400 w-full mt-1">
-                      🍽️ Signed in as <strong>{restaurantName}</strong> (restaurant account)
-                    </p>
-                  </>
-                ) : (
-                  <button
-                    onClick={openLoginModal}
-                    className="bg-gray-700 text-white px-4 py-1.5 rounded-lg font-semibold hover:bg-gray-800 transition text-sm"
-                  >
-                    Login
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-        </div>
+    // v4.5: the home page's look. A floating bar on top (same buttons as before), warm paper background.
+    <div className="fp-app min-h-screen bg-gray-50 px-3 sm:px-4 pt-3 pb-24">
+        {topNav}
+      <div className="max-w-4xl mx-auto">
+        <EmailVerificationBanner authToken={token} />
 
         {authModal}
 
@@ -538,20 +467,6 @@ function App() {
           />
         ))}
 
-        {currentView === 'restaurant' && (
-          <RestaurantPortal
-            onBack={handleBackToScanner}
-            startOn={portalStart}
-          />
-        )}
-
-        {currentView === 'supply' && (
-          <SupplyChainPage onBack={handleBackToScanner} />
-        )}
-
-        {currentView === 'admin' && (
-          <AdminPage onBack={handleBackToScanner} />
-        )}
 
         {currentView === 'leaderboard' && (
   <Leaderboard

@@ -292,26 +292,26 @@ function UserProfile({ authToken, onBack }) {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4 border border-green-200">
-          <div className="text-3xl mb-2">🏆</div>
-          <div className="text-2xl font-bold text-gray-800">{stats?.totalBadges || 0}</div>
+        <div className="bg-white rounded-2xl p-4 border border-black/5">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl mb-3" style={{ background: '#E3EFE1' }}>🏆</div>
+          <div className="text-2xl font-extrabold text-gray-900">{stats?.totalBadges || 0}</div>
           <div className="text-sm text-gray-600">Total Badges</div>
         </div>
 
-        <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200">
-          <div className="text-3xl mb-2">🌾</div>
-          <div className="text-2xl font-bold text-gray-800">{stats?.farmsDiscovered || 0}</div>
+        <div className="bg-white rounded-2xl p-4 border border-black/5">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl mb-3" style={{ background: '#FBF0D6' }}>🌾</div>
+          <div className="text-2xl font-extrabold text-gray-900">{stats?.farmsDiscovered || 0}</div>
           <div className="text-sm text-gray-600">Farms Discovered</div>
         </div>
 
-        <div className="bg-gradient-to-br from-orange-50 to-orange-100 rounded-lg p-4 border border-orange-200">
-          <div className="text-3xl mb-2">🍽️</div>
-          <div className="text-2xl font-bold text-gray-800">{stats?.restaurantsVisited || 0}</div>
+        <div className="bg-white rounded-2xl p-4 border border-black/5">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl mb-3" style={{ background: '#FBE3DD' }}>🍽️</div>
+          <div className="text-2xl font-extrabold text-gray-900">{stats?.restaurantsVisited || 0}</div>
           <div className="text-sm text-gray-600">Restaurants</div>
         </div>
 
-        <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg p-4 border border-purple-200">
-          <div className="text-3xl mb-2">📅</div>
+        <div className="bg-white rounded-2xl p-4 border border-black/5">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl mb-3" style={{ background: '#F6F6F2' }}>📅</div>
           <div className="text-sm font-semibold text-gray-800">
             {profile?.memberSince ? new Date(profile.memberSince).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : 'N/A'}
           </div>
@@ -322,12 +322,12 @@ function UserProfile({ authToken, onBack }) {
       {/* Tabs Section - Badges & Achievements */}
       <div className="bg-white rounded-lg shadow-lg p-6">
         {/* Tab Buttons */}
-        <div className="flex gap-4 mb-6 border-b border-gray-200">
+        <div className="inline-flex gap-1 mb-6 p-1 rounded-xl bg-gray-100">
           <button
             onClick={() => setActiveTab('badges')}
-            className={`pb-3 px-4 font-semibold transition ${
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
               activeTab === 'badges'
-                ? 'border-b-2 border-green-600 text-green-600'
+                ? 'bg-white text-green-700 shadow-sm'
                 : 'text-gray-600 hover:text-gray-800'
             }`}
           >
@@ -335,9 +335,9 @@ function UserProfile({ authToken, onBack }) {
           </button>
           <button
             onClick={() => setActiveTab('achievements')}
-            className={`pb-3 px-4 font-semibold transition ${
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
               activeTab === 'achievements'
-                ? 'border-b-2 border-green-600 text-green-600'
+                ? 'bg-white text-green-700 shadow-sm'
                 : 'text-gray-600 hover:text-gray-800'
             }`}
           >

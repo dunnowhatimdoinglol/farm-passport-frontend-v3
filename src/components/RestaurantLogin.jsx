@@ -55,7 +55,7 @@ function RestaurantLogin({ onLogin, onSwitchToRegister }) {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="your@restaurant.com"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-600 focus:border-transparent"
               required
             />
           </div>
@@ -67,7 +67,7 @@ function RestaurantLogin({ onLogin, onSwitchToRegister }) {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-600 focus:border-transparent"
               required
             />
           </div>
@@ -75,7 +75,7 @@ function RestaurantLogin({ onLogin, onSwitchToRegister }) {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-orange-600 text-white py-3 rounded-lg hover:bg-orange-700 transition font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed"
+            className="w-full bg-green-700 text-white py-3 rounded-lg hover:bg-green-800 transition font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed"
           >
             {loading ? 'Logging in…' : 'Login'}
           </button>
@@ -86,7 +86,7 @@ function RestaurantLogin({ onLogin, onSwitchToRegister }) {
             New restaurant?{' '}
             <button
               onClick={onSwitchToRegister}
-              className="text-orange-600 hover:underline font-semibold"
+              className="text-green-700 hover:underline font-semibold"
             >
               Sign up
             </button>

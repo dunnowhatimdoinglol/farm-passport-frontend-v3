@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import DashShell, { PageTitle, StatTile } from './DashShell';
 import {
   API_BASE, hasWallet, shortAddr, connectMetaMask, metaMaskSign, walletSignIn,
   supplyChainWithSigner, sendAndConfirm, walletError, syncTransaction, BADGES_ABI, PROCESSING_ABI,
@@ -11,7 +12,7 @@ import {
  * add depots/drivers (handlers), and use the pause switch.
  * Approvals go through the backend; handler/pause changes are signed by your wallet.
  */
-function AdminPage({ onBack }) {
+function AdminPage({ onBack, onHome, topNav = null }) {
   const [account, setAccount] = useState(null);
   const [token,   setToken]   = useState(null);
   const [data,    setData]    = useState(null);
@@ -29,6 +30,12 @@ function AdminPage({ onBack }) {
   const [newImpl,  setNewImpl]  = useState('');       // upgrade: new Traceability implementation address
   const [contacts, setContacts] = useState({});       // v4.4: handler address → alert email (saved)
   const [contactEdit, setContactEdit] = useState({}); // handler address → alert email being typed
+  // v4.5: which admin page is showing
+  const [sec, setSecState] = useState(() => { try { return sessionStorage.getItem('fp_admin_tab') || 'today'; } catch { return 'today'; } });
+  const setSec = (t) => { setSecState(t); try { sessionStorage.setItem('fp_admin_tab', t); } catch { /* fine */ } window.scrollTo({ top: 0 }); };
+  const frame = (inner) => topNav ? (
+    <div className="fp-app min-h-screen bg-gray-50 px-3 sm:px-4 pt-3 pb-24">{topNav}<div className="fp-page pt-2">{inner}</div></div>
+  ) : inner;
 
   const auth = { headers: { Authorization: `Bearer ${token}` } };
 
@@ -160,7 +167,7 @@ function AdminPage({ onBack }) {
 
   const Btn = ({ onClick, children, kind = 'green', id }) => (
     <button onClick={onClick} disabled={busy !== null}
-      className={`text-xs font-semibold px-3 py-1.5 rounded-lg disabled:bg-gray-300 ${
+      className={`h-fit text-xs font-semibold px-3 py-1.5 rounded-lg disabled:bg-gray-300 ${
         kind === 'green' ? 'bg-green-600 text-white hover:bg-green-700' : 'border border-gray-300 text-gray-700 hover:bg-gray-50'}`}>
       {busy === id ? '…' : children}
     </button>
@@ -174,8 +181,8 @@ function AdminPage({ onBack }) {
   );
 
   if (!token) {
-    return (
-      <div className="max-w-md mx-auto bg-white rounded-lg shadow-lg p-8 text-center space-y-4">
+    return frame(
+      <div className="max-w-md mx-auto bg-white rounded-3xl border border-black/5 p-8 text-center space-y-4">
         <div className="text-5xl">🛡️</div>
         <h2 className="text-2xl font-bold text-gray-800">Admin</h2>
         <p className="text-gray-600 text-sm">Sign in with the owner wallet. Signing is free and doesn't send a transaction.</p>
@@ -190,33 +197,54 @@ function AdminPage({ onBack }) {
     );
   }
 
-  if (!data) return <div className="max-w-4xl mx-auto bg-white rounded-lg shadow-lg p-8 text-center">⏳ Loading…{error && <p className="text-red-600 mt-2">⚠️ {error}</p>}</div>;
+  if (!data) return frame(<div className="max-w-4xl mx-auto bg-white rounded-lg shadow-lg p-8 text-center">⏳ Loading…{error && <p className="text-red-600 mt-2">⚠️ {error}</p>}</div>);
 
   const pendingRestaurants = data.restaurants.filter(r => r.status !== 'approved' && r.status !== 'rejected');
   const pendingFarmers = data.farmers.filter(f => f.status === 'pending');
 
+  const handlerCount = (data.participants || []).filter(p => p.role === 'handler').length;
+  const recalls = data.recalledBatches || [];
+  const needsSetup = !data.backendIsOperator || !data.backendIsBadgeOperator
+    || (data.processingAddress && (!data.processingConnected || !data.backendIsProcessingOperator));
+  const nav = [
+    { key: 'today', icon: '🛡️', label: 'Overview', badge: ((needsSetup ? 1 : 0) + recalls.length) || null },
+    { key: 'cafes', icon: '🍽️', label: 'Restaurants', badge: pendingRestaurants.length || null },
+    { key: 'farms', icon: '👨‍🌾', label: 'Farms', badge: pendingFarmers.length || null },
+    { key: 'handlers', icon: '📦', label: 'Depots & abattoirs' },
+    { key: 'tools', icon: '🔧', label: 'Re-sync & versions' },
+  ];
+  const titles = { today: 'Overview', cafes: 'Restaurants', farms: 'Farms', handlers: 'Depots, drivers & abattoirs', tools: 'Re-sync & contract versions' };
+  const pauseBtn = config && (
+    config.paused ? (
+      <Btn id="pause" onClick={() => ownerTx('pause', 'unpause', [], 'Recording resumed')}>▶️ Resume recording</Btn>
+    ) : (
+      <Btn id="pause" kind="grey" onClick={() => window.confirm('Pause ALL supply-chain recording?') && ownerTx('pause', 'pause', [], 'Recording paused')}>⏸️ Emergency pause</Btn>
+    )
+  );
+
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <div className="bg-white rounded-lg shadow-lg p-6 flex justify-between items-center flex-wrap gap-3">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-800">🛡️ Admin</h2>
-          <p className="text-sm text-gray-500">Signed in as {shortAddr(account)}</p>
+    <DashShell
+      who={{ name: 'Admin', sub: `Owner · ${shortAddr(account)}`, status: config?.paused ? 'stop' : 'ok' }}
+      nav={nav} phone={['today', 'cafes', 'farms', 'handlers']} active={sec} onNav={setSec}
+      onHome={onHome || onBack} onLogout={() => { setToken(null); setData(null); onBack?.(); }}
+      tips={['Check the business reference before approving a restaurant.', 'Depots and abattoirs are added from your own wallet: MetaMask will ask you to confirm.', 'If a page didn’t update after a transaction, paste its hash into Re-sync.']}>
+    <div className="fp-page space-y-6">
+      <PageTitle kicker={config?.paused ? '⏸️ Recording is paused' : `Signed in as ${shortAddr(account)}`} title={titles[sec] || 'Admin'} actions={pauseBtn} />
+
+      {sec === 'today' && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <StatTile icon="🍽️" value={pendingRestaurants.length} label="Restaurants waiting" tone={pendingRestaurants.length ? 'honey' : 'white'} onClick={() => setSec('cafes')} />
+          <StatTile icon="👨‍🌾" value={pendingFarmers.length} label="Farms waiting" tone={pendingFarmers.length ? 'honey' : 'white'} onClick={() => setSec('farms')} />
+          <StatTile icon="📦" value={handlerCount} label="Depots & abattoirs" onClick={() => setSec('handlers')} />
+          <StatTile icon="🚨" value={recalls.length} label="Recalled batches" tone={recalls.length ? 'coral' : 'white'} />
         </div>
-        {config && (
-          config.paused ? (
-            <Btn id="pause" onClick={() => ownerTx('pause', 'unpause', [], 'Recording resumed')}>▶️ Resume recording</Btn>
-          ) : (
-            <Btn id="pause" kind="grey" onClick={() => window.confirm('Pause ALL supply-chain recording?') && ownerTx('pause', 'pause', [], 'Recording paused')}>⏸️ Emergency pause</Btn>
-          )
-        )}
-      </div>
+      )}
 
       {error && <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-red-700 text-sm font-semibold">⚠️ {error}</div>}
       {message && <div className="bg-green-50 border border-green-300 rounded-lg p-3 text-green-700 text-sm font-semibold">✅ {message}</div>}
 
       {/* One-time setup: the backend acts for farms and cafés (it pays the gas) and awards badges */}
-      {(!data.backendIsOperator || !data.backendIsBadgeOperator
-        || (data.processingAddress && (!data.processingConnected || !data.backendIsProcessingOperator))) && (
+      {sec === 'today' && needsSetup && (
         <div className="bg-yellow-50 border-2 border-yellow-400 rounded-lg p-5">
           <p className="font-bold text-yellow-800">One-time setup: let the backend do its job</p>
           <p className="text-sm text-yellow-700 mt-1">
@@ -243,7 +271,7 @@ function AdminPage({ onBack }) {
       )}
 
       {/* Recalled batches */}
-      {data.recalledBatches?.length > 0 && (
+      {sec === 'today' && data.recalledBatches?.length > 0 && (
         <div className="bg-red-50 border-2 border-red-300 rounded-lg p-5">
           <h3 className="font-bold text-red-800 mb-2">🚨 Recalled batches ({data.recalledBatches.length})</h3>
           <div className="divide-y divide-red-200">
@@ -262,6 +290,7 @@ function AdminPage({ onBack }) {
       )}
 
       {/* Restaurants */}
+      {sec === 'cafes' && (
       <div className="bg-white rounded-lg shadow-lg p-6">
         <h3 className="text-lg font-bold text-gray-800 mb-1">🍽️ Restaurants {pendingRestaurants.length > 0 && <span className="text-sm text-yellow-700">({pendingRestaurants.length} waiting)</span>}</h3>
         <p className="text-xs text-gray-500 mb-4">Check the business reference (council food registration / Companies House) before approving.</p>
@@ -282,8 +311,10 @@ function AdminPage({ onBack }) {
           ))}
         </div>
       </div>
+      )}
 
       {/* Farms */}
+      {sec === 'farms' && (
       <div className="bg-white rounded-lg shadow-lg p-6">
         <h3 className="text-lg font-bold text-gray-800 mb-1">👨‍🌾 Farms {pendingFarmers.length > 0 && <span className="text-sm text-yellow-700">({pendingFarmers.length} waiting)</span>}</h3>
         <p className="text-xs text-gray-500 mb-4">Approving registers the farm on the blockchain under its farm name only (the backend pays the gas). Check the CPH number first.</p>
@@ -306,8 +337,10 @@ function AdminPage({ onBack }) {
           ))}
         </div>
       </div>
+      )}
 
       {/* Handlers */}
+      {sec === 'handlers' && (
       <div className="bg-white rounded-lg shadow-lg p-6">
         <h3 className="text-lg font-bold text-gray-800 mb-4">📦 Depots, drivers & other handlers</h3>
         <div className="divide-y divide-gray-100 mb-5">
@@ -373,8 +406,10 @@ function AdminPage({ onBack }) {
           </button>
         </form>
       </div>
+      )}
 
       {/* Re-sync: copy a transaction's results from the chain into the app (if a page didn't update) */}
+      {sec === 'tools' && (<>
       <div className="bg-white rounded-lg shadow-lg p-6">
         <h3 className="text-lg font-bold text-gray-800 mb-1">🔄 Re-sync a transaction</h3>
         <p className="text-xs text-gray-500 mb-3">
@@ -415,11 +450,9 @@ function AdminPage({ onBack }) {
           <Btn id="upgrade" kind="grey" onClick={upgradeTraceability}>Upgrade Traceability</Btn>
         </div>
       </details>
-
-      <div className="text-center">
-        <button onClick={onBack} className="text-gray-600 hover:underline">← Back</button>
-      </div>
+      </>)}
     </div>
+    </DashShell>
   );
 }
 
