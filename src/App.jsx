@@ -19,6 +19,7 @@ import SupplyChainPage from './components/SupplyChainPage';
 import AdminPage from './components/AdminPage';
 import Maru from './components/Maru';
 import AppNav from './components/AppNav';
+import './theme';   // v4.5b: switches light / dark mode on as soon as the app loads
 import HomePage from './components/HomePage';
 import LegalPage from './components/LegalPage';
 import { parseFarmLink } from './components/walletHelpers';

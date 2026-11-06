@@ -3,6 +3,7 @@
 // Animations use IntersectionObserver (works in every browser) and respect "reduce motion".
 import { useState, useEffect, useRef } from 'react';
 import { API_BASE } from './walletHelpers';
+import { ThemeToggle } from '../theme';
 
 const CONTACT_EMAIL = 'farmpassport.hello@gmail.com';
 const ACCENT = '#2F6B3A';
@@ -214,7 +215,7 @@ function Tagline() {
   return (
     <p ref={ref} className="text-4xl sm:text-5xl md:text-6xl font-bold leading-[1.05] tracking-tight max-w-4xl">
       {words.map((w, i) => (
-        <span key={i} className="fp-word" style={{ color: inView ? '#141414' : 'rgba(20,20,20,0.18)', transitionDelay: `${i * 90}ms` }}>
+        <span key={i} className="fp-word" style={{ color: inView ? 'var(--fp-ink)' : 'var(--fp-ink-faint)', transitionDelay: `${i * 90}ms` }}>
           {w}{' '}
         </span>
       ))}
@@ -405,6 +406,8 @@ function HomePage({ onNavigate, onLogin, onRegister, signedInAs }) {
             <a href="#features" onClick={scrollTo('features')} className="hover:text-[#141414] transition-colors">Features</a>
             <a href="#faq" onClick={scrollTo('faq')} className="hover:text-[#141414] transition-colors">FAQ</a>
           </div>
+          <div className="flex items-center gap-1 shrink-0">
+          <ThemeToggle />
           <div className="relative shrink-0" ref={menuRef}>
             {signedInAs ? (
               <button onClick={() => onNavigate(signedInAs.view)} className="fp-btn text-white text-sm font-semibold px-4 py-2 rounded-xl" style={{ background: ACCENT }}>
@@ -432,6 +435,7 @@ function HomePage({ onNavigate, onLogin, onRegister, signedInAs }) {
                 </div>
               </>
             )}
+          </div>
           </div>
         </nav>
       </div>
@@ -563,7 +567,7 @@ function HomePage({ onNavigate, onLogin, onRegister, signedInAs }) {
             </div>
             <div className="pt-4 text-sm text-[#5B5B55]">
               Questions first? Email us at{' '}
-              <a href={`mailto:${CONTACT_EMAIL}?subject=Farm%20Passport%20enquiry`} className="font-semibold underline underline-offset-4" style={{ color: '#1F5A2E' }}>{CONTACT_EMAIL}</a>
+              <a href={`mailto:${CONTACT_EMAIL}?subject=Farm%20Passport%20enquiry`} className="font-semibold underline underline-offset-4 text-[#1F5A2E]">{CONTACT_EMAIL}</a>
               <button onClick={copyEmail} className="ml-2 text-xs px-2 py-1 rounded-lg bg-[#F1F4EF] hover:bg-[#E3EDE3] transition-colors">{copied ? '✓ Copied' : 'Copy'}</button>
             </div>
           </Reveal>

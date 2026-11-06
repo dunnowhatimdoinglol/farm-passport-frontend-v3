@@ -1240,10 +1240,10 @@ function AbattoirToday({ data, go }) {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-        {tile('🐄', data.animalsComing.length, 'Deliveries arriving', fciMissing ? `${fciMissing} still need FCI` : 'All have FCI', '#FBF0D6', 'animals')}
-        {tile('🔪', data.animalsHere.length, 'Waiting to kill', 'On site now', '#FBE3DD', 'kill')}
-        {tile('⚖️', yieldPct !== null ? `${yieldPct}%` : '—', 'Yield', 'Carcass weight → cuts made', '#E3EDE3', 'stock')}
-        {tile('🧾', ready.length, 'Café orders to pack', `${data.orders.length} open in total`, '#F6F6F2', 'orders')}
+        {tile('🐄', data.animalsComing.length, 'Deliveries arriving', fciMissing ? `${fciMissing} still need FCI` : 'All have FCI', 'var(--fp-tint-honey)', 'animals')}
+        {tile('🔪', data.animalsHere.length, 'Waiting to kill', 'On site now', 'var(--fp-tint-coral)', 'kill')}
+        {tile('⚖️', yieldPct !== null ? `${yieldPct}%` : '—', 'Yield', 'Carcass weight → cuts made', 'var(--fp-tint-mint)', 'stock')}
+        {tile('🧾', ready.length, 'Café orders to pack', `${data.orders.length} open in total`, 'var(--fp-tint-paper)', 'orders')}
       </div>
       <div className="bg-white rounded-3xl border border-black/5 p-5 sm:p-6">
         <h2 className="text-lg font-bold mb-4">From farm to cuts</h2>

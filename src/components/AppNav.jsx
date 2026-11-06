@@ -1,6 +1,8 @@
 // AppNav (v4.5) — the floating bar at the top of every page inside the app, in the home page's style.
 // The same buttons as before (Home, Scan, Profile, Farmer Portal, Restaurant, Supply Chain, Leaderboard,
 // Login / Logout), just laid out as one tidy bar. On a phone the buttons scroll sideways.
+import { ThemeToggle } from '../theme';
+
 const ACCENT = '#2F6B3A';
 
 function Leaf() {
@@ -45,6 +47,7 @@ export default function AppNav({ current, user, restaurantName, onHome, onScan, 
               )}
             </div>
           </div>
+          <ThemeToggle />
         </div>
       </nav>
     </div>

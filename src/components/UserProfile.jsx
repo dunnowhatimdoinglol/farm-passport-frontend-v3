@@ -293,25 +293,25 @@ function UserProfile({ authToken, onBack }) {
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-white rounded-2xl p-4 border border-black/5">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl mb-3" style={{ background: '#E3EFE1' }}>🏆</div>
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl mb-3" style={{ background: 'var(--fp-tint-mint)' }}>🏆</div>
           <div className="text-2xl font-extrabold text-gray-900">{stats?.totalBadges || 0}</div>
           <div className="text-sm text-gray-600">Total Badges</div>
         </div>
 
         <div className="bg-white rounded-2xl p-4 border border-black/5">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl mb-3" style={{ background: '#FBF0D6' }}>🌾</div>
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl mb-3" style={{ background: 'var(--fp-tint-honey)' }}>🌾</div>
           <div className="text-2xl font-extrabold text-gray-900">{stats?.farmsDiscovered || 0}</div>
           <div className="text-sm text-gray-600">Farms Discovered</div>
         </div>
 
         <div className="bg-white rounded-2xl p-4 border border-black/5">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl mb-3" style={{ background: '#FBE3DD' }}>🍽️</div>
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl mb-3" style={{ background: 'var(--fp-tint-coral)' }}>🍽️</div>
           <div className="text-2xl font-extrabold text-gray-900">{stats?.restaurantsVisited || 0}</div>
           <div className="text-sm text-gray-600">Restaurants</div>
         </div>
 
         <div className="bg-white rounded-2xl p-4 border border-black/5">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl mb-3" style={{ background: '#F6F6F2' }}>📅</div>
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl mb-3" style={{ background: 'var(--fp-tint-paper)' }}>📅</div>
           <div className="text-sm font-semibold text-gray-800">
             {profile?.memberSince ? new Date(profile.memberSince).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : 'N/A'}
           </div>

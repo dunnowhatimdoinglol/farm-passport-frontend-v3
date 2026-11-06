@@ -5,8 +5,10 @@
 // It only lays things out: each dashboard keeps its own pages, buttons and logic.
 import { useState, useEffect } from 'react';
 import Maru from './Maru';
+import { ThemeToggle } from '../theme';
 
-export const FP = { ink: '#141414', forest: '#13261A', green: '#2F6B3A', mint: '#E3EDE3', paper: '#F6F6F2', honey: '#E2B04A', coral: '#E0644B' };
+// v4.5b: ink, mint and paper follow light / dark mode (see index.css)
+export const FP = { ink: 'var(--fp-ink)', forest: '#13261A', green: '#2F6B3A', mint: 'var(--fp-tint-mint)', paper: 'var(--fp-tint-paper)', honey: '#E2B04A', coral: '#E0644B' };
 
 function Leaf({ color = '#9BD3A3', size = 22 }) {
   return (
@@ -39,7 +41,7 @@ export default function DashShell({ who, nav, phone = [], active, onNav, extras 
 
   const NavItem = ({ n }) => (
     <button onClick={() => onNav(n.key)} aria-current={active === n.key ? 'page' : undefined}
-      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-left transition-colors ${active === n.key ? 'bg-white text-[#13261A] shadow-sm' : 'text-white/75 hover:bg-white/10 hover:text-white'}`}>
+      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-left transition-colors ${active === n.key ? 'fp-light bg-white text-[#13261A] shadow-sm' : 'text-white/75 hover:bg-white/10 hover:text-white'}`}>
       <span className="text-base w-5 text-center">{n.icon}</span><span className="flex-1">{n.label}</span>
       {n.badge ? <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{ background: FP.honey, color: FP.forest }}>{n.badge}</span> : null}
     </button>
@@ -71,6 +73,7 @@ export default function DashShell({ who, nav, phone = [], active, onNav, extras 
                 <span className="block text-xs text-white/70">{tip < 0 ? 'Tap me for a tip' : tips[tip]}</span></span>
             </button>
           )}
+          <ThemeToggle variant="side" />
           <div className="flex gap-2 text-xs text-white/60">
             <button onClick={onHome} className="hover:text-white">🏠 Home</button><span>·</span>
             <button onClick={onLogout} className="hover:text-white">Log out</button>
@@ -87,7 +90,8 @@ export default function DashShell({ who, nav, phone = [], active, onNav, extras 
             <span className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-extrabold shrink-0" style={{ background: FP.honey, color: FP.forest }}>{initialsOf(who.name)}</span>
             <span className="min-w-0"><span className="block font-bold leading-tight truncate">{who.name}</span><span className="block text-[11px] text-gray-500 truncate">{who.sub}</span></span>
           </button>
-          <div className="flex gap-2 shrink-0">
+          <div className="flex gap-2 shrink-0 items-center">
+            <ThemeToggle />
             {extras.slice(0, 1).map(x => (
               <button key={x.key} onClick={x.onClick} aria-label={x.label} className={`w-10 h-10 rounded-xl border flex items-center justify-center ${x.active ? 'bg-gray-800 border-gray-800 text-white' : 'bg-white border-black/5'}`}>{x.icon}</button>
             ))}
@@ -134,6 +138,7 @@ export default function DashShell({ who, nav, phone = [], active, onNav, extras 
               <button key={x.key} onClick={() => { setMore(false); x.onClick(); }} className="w-full flex items-center gap-3 px-3 py-3 rounded-2xl text-left font-semibold hover:bg-gray-100">
                 <span className="w-6 text-center text-lg">{x.icon}</span>{x.label}</button>
             ))}
+            <ThemeToggle variant="row" />
             <div className="flex gap-2 pt-2 border-t border-black/5">
               <button onClick={onHome} className="flex-1 py-3 rounded-2xl font-semibold text-gray-700 hover:bg-gray-100">🏠 Home</button>
               <button onClick={onLogout} className="flex-1 py-3 rounded-2xl font-semibold text-gray-700 hover:bg-gray-100">Log out</button>
@@ -159,7 +164,7 @@ export function PageTitle({ kicker, title, actions }) {
 }
 
 export function StatTile({ icon, value, label, sub, tone = 'mint', onClick }) {
-  const bg = { mint: FP.mint, honey: '#FBF0D6', coral: '#FBE3DD', white: '#F6F6F2' }[tone];
+  const bg = { mint: 'var(--fp-tint-mint)', honey: 'var(--fp-tint-honey)', coral: 'var(--fp-tint-coral)', white: 'var(--fp-tint-paper)' }[tone];  // v4.5b: these follow light / dark mode
   const Tag = onClick ? 'button' : 'div';
   return (
     <Tag onClick={onClick} className={`bg-white rounded-3xl border border-black/5 p-4 sm:p-5 text-left ${onClick ? 'hover:shadow-md transition-shadow' : ''}`}>
